@@ -1,0 +1,170 @@
+<?xml version="1.0"?>
+
+<robot>
+
+  <!-- ========================================================= -->
+  <!-- DIFFERENTIAL DRIVE -->
+  <!-- ========================================================= -->
+
+  <gazebo>
+
+    <plugin
+      filename="ignition-gazebo-diff-drive-system"
+      name="ignition::gazebo::systems::DiffDrive">
+
+      <!-- ===================================================== -->
+      <!-- ROBOT-SPECIFIC COMMAND TOPIC -->
+      <!-- ===================================================== -->
+
+      <topic>${robot_name}/cmd_vel</topic>
+
+      <!-- ===================================================== -->
+      <!-- WHEEL JOINTS -->
+      <!-- ===================================================== -->
+
+      <left_joint>${robot_name}/left_wheel_joint</left_joint>
+      <right_joint>${robot_name}/right_wheel_joint</right_joint>
+
+      <!-- ===================================================== -->
+      <!-- WHEEL PARAMETERS -->
+      <!-- ===================================================== -->
+
+      <wheel_separation>0.3</wheel_separation>
+      <wheel_radius>0.1</wheel_radius>
+
+      <!-- ===================================================== -->
+      <!-- LIMITS -->
+      <!-- ===================================================== -->
+
+      <max_velocity>3.0</max_velocity>
+
+      <max_linear_acceleration>1</max_linear_acceleration>
+      <min_linear_acceleration>-1</min_linear_acceleration>
+
+      <max_angular_acceleration>2</max_angular_acceleration>
+      <min_angular_acceleration>-2</min_angular_acceleration>
+
+      <max_linear_velocity>0.5</max_linear_velocity>
+      <min_linear_velocity>-0.5</min_linear_velocity>
+
+      <max_angular_velocity>1</max_angular_velocity>
+      <min_angular_velocity>-1</min_angular_velocity>
+
+      <!-- ===================================================== -->
+      <!-- ODOMETRY -->
+      <!-- ===================================================== -->
+
+      <odom_topic>${robot_name}/odom</odom_topic>
+
+      <tf_topic>tf</tf_topic>
+
+      <frame_id>${robot_name}/odom</frame_id>
+
+      <child_frame_id>${robot_name}/base_footprint</child_frame_id>
+
+      <odom_publish_frequency>30</odom_publish_frequency>
+
+    </plugin>
+
+
+    <!-- ======================================================= -->
+    <!-- JOINT STATE PUBLISHER -->
+    <!-- ======================================================= -->
+
+    <plugin
+      filename="gz-sim-joint-state-publisher-system"
+      name="gz::sim::systems::JointStatePublisher">
+
+      <topic>${robot_name}/joint_states</topic>
+
+      <joint_name>${robot_name}/left_wheel_joint</joint_name>
+
+      <joint_name>${robot_name}/right_wheel_joint</joint_name>
+
+    </plugin>
+
+  </gazebo>
+
+
+  <!-- ========================================================= -->
+  <!-- LIDAR -->
+  <!-- ========================================================= -->
+
+  <gazebo reference="${robot_name}/lidar_link">
+
+    <sensor
+      name="${robot_name}_lidar"
+      type="gpu_lidar">
+
+      <pose>0 0 0 0 0 0</pose>
+
+      <always_on>true</always_on>
+
+      <visualize>true</visualize>
+
+      <update_rate>10</update_rate>
+
+      <topic>${robot_name}/scan</topic>
+
+      <gz_frame_id>${robot_name}/lidar_link</gz_frame_id>
+
+      <lidar>
+
+        <scan>
+
+          <horizontal>
+
+            <samples>360</samples>
+
+            <resolution>1</resolution>
+
+            <min_angle>-3.14</min_angle>
+
+            <max_angle>3.14</max_angle>
+
+          </horizontal>
+
+        </scan>
+
+        <range>
+
+          <min>0.3</min>
+
+          <max>12</max>
+
+        </range>
+
+      </lidar>
+
+    </sensor>
+
+  </gazebo>
+
+
+  <!-- ========================================================= -->
+  <!-- IMU -->
+  <!-- ========================================================= -->
+
+  <gazebo reference="${robot_name}/imu_link">
+
+    <sensor
+      name="${robot_name}_imu"
+      type="imu">
+
+      <always_on>1</always_on>
+
+      <update_rate>50</update_rate>
+
+      <visualize>true</visualize>
+
+      <topic>${robot_name}/imu</topic>
+
+      <enable_metrics>true</enable_metrics>
+
+      <gz_frame_id>${robot_name}/imu_link</gz_frame_id>
+
+    </sensor>
+
+  </gazebo>
+
+</robot>

@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Arguments -->
+    <arg name="use_sim_time" default="false" description="Use simulation clock if true" />
+    <!-- Variables -->
+    <let name="pkg_share" value="$(find-pkg-share virtual_lab)" />
+    <let name="urdf_file" value="$(var pkg_share)/urdf/slam_bot.urdf" />
+    <let name="rviz_config" value="$(var pkg_share)/rviz/urdf.rviz" />
+    <!-- Robot_State_Publisher -->
+    <node pkg="robot_state_publisher" exec="robot_state_publisher" name="robot_state_publisher" output="screen">
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+        <param name="robot_description" value="$(command 'xacro $(var urdf_file)')" />
+    </node>
+    <!-- Joint_State -->
+    <node pkg="joint_state_publisher" exec="joint_state_publisher" name="joint_state_publisher">
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+    </node>
+    <!-- Joint_State_Gui -->
+    <node pkg="joint_state_publisher_gui" exec="joint_state_publisher_gui" name="joint_state_publisher_gui">
+    </node>
+    <!-- Rviz -->
+    <node pkg="rviz2" exec="rviz2" name="rviz2" output="screen" args="-d $(var rviz_config)">
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+    </node>
+</launch>

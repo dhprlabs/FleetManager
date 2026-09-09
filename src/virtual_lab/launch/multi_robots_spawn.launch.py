@@ -23,7 +23,7 @@ def generate_launch_description():
 
     world_arg = DeclareLaunchArgument(
         'world',
-        default_value='room_with_cones.sdf',
+        default_value='logistics_warehouse.sdf',
         description='Gazebo world file'
     )
 
@@ -104,7 +104,7 @@ def generate_launch_description():
 
             '-x', '4.88',
             '-y', '-6.30',
-            '-z', '0.10',
+            '-z', '0.30',
             '-Y', '1.57'
         ],
 
@@ -159,7 +159,7 @@ def generate_launch_description():
 
             '-x', '2.0',
             '-y', '-6.30',
-            '-z', '0.10',
+            '-z', '0.30',
             '-Y', '1.57'
         ],
 
@@ -212,9 +212,9 @@ def generate_launch_description():
             '-name', 'robot3',
             '-topic', '/robot3/robot_description',
 
-            '-x', '-0.88',
+            '-x', '-3.88',
             '-y', '-6.30',
-            '-z', '0.10',
+            '-z', '0.30',
             '-Y', '1.57'
         ],
 

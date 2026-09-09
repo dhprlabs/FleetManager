@@ -27,6 +27,9 @@
       name="gz::sim::systems::Sensors">
       <render_engine>ogre2</render_engine>
     </plugin>
+    <plugin filename="gz-sim-imu-system"
+        name="gz::sim::systems::Imu">
+    </plugin>
   <gravity>0 0 -9.8</gravity>
     <model name='ground_plane'>
       <static>true</static>
@@ -78,7 +81,7 @@
       <self_collide>false</self_collide>
     </model>
     <include>
-      <uri>file:///home/dhairya/Bot/Software/Ros/src/virtual_lab/worlds/meshes/room//</uri>
+      <uri>file:///home/dhairya/FleetManager/src/virtual_lab/worlds/meshes/room//</uri>
       <name>Room</name>
       <pose>0.123559 0.081528 0 0 -0 0</pose>
     </include>

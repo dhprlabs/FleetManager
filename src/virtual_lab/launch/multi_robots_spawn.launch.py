@@ -14,7 +14,7 @@ def generate_launch_description():
     pkg_virtual_lab = get_package_share_directory('virtual_lab')
 
     gazebo_models_path, ignore_last_dir = os.path.split(pkg_virtual_lab)
-    os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
+    os.environ["GZ_SIM_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
 
 
     # =========================================================

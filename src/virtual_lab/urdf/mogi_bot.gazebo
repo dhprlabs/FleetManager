@@ -106,7 +106,7 @@
 
       <topic>${robot_name}/scan</topic>
 
-      <gz_frame_id>${robot_name}/lidar_link</gz_frame_id>
+      <!-- <gz_frame_id>${robot_name}/lidar_link</gz_frame_id> -->
 
       <lidar>
 
@@ -161,7 +161,7 @@
 
       <enable_metrics>true</enable_metrics>
 
-      <gz_frame_id>${robot_name}/imu_link</gz_frame_id>
+      <!-- <gz_frame_id>${robot_name}/imu_link</gz_frame_id> -->
 
     </sensor>
 

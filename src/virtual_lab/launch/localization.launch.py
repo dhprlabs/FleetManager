@@ -3,104 +3,65 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
-from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
+
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
 def generate_launch_description():
 
-    pkg_share = get_package_share_directory('virtual_lab')
+    # ============================================================
+    # PACKAGE PATH
+    # ============================================================
 
-    # ------------------------------------------------------------------
-    # Paths
-    # ------------------------------------------------------------------
+    pkg_virtual_lab = get_package_share_directory('virtual_lab')
 
     map_file = os.path.join(
-        pkg_share,
+        pkg_virtual_lab,
         'maps',
         'logistics_warehouse.yaml'
     )
 
-    amcl_robot1_config = os.path.join(
-        pkg_share,
+    amcl_robot1_file = os.path.join(
+        pkg_virtual_lab,
         'config',
         'amcl_robot1.yaml'
     )
 
-    amcl_robot2_config = os.path.join(
-        pkg_share,
+    amcl_robot2_file = os.path.join(
+        pkg_virtual_lab,
         'config',
         'amcl_robot2.yaml'
     )
 
-    amcl_robot3_config = os.path.join(
-        pkg_share,
+    amcl_robot3_file = os.path.join(
+        pkg_virtual_lab,
         'config',
         'amcl_robot3.yaml'
     )
 
-    use_sim_time = LaunchConfiguration(
-        'use_sim_time'
-    )
-
-    # ------------------------------------------------------------------
-    # Launch arguments
-    # ------------------------------------------------------------------
-
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='true',
-        description='Use Gazebo simulation clock'
-    )
-
-    # ------------------------------------------------------------------
-    # Map Server
-    #
-    # ONE map server for the entire multi-robot system.
-    # ------------------------------------------------------------------
+    # ============================================================
+    # SHARED MAP SERVER
+    # ============================================================
 
     map_server = Node(
         package='nav2_map_server',
         executable='map_server',
         name='map_server',
+        namespace='',
         output='screen',
+
         parameters=[
             {
+                'use_sim_time': True,
                 'yaml_filename': map_file,
-                'use_sim_time': use_sim_time,
             }
-        ],
+        ]
     )
 
-    # ------------------------------------------------------------------
-    # Lifecycle Manager
-    #
-    # Activates the single map_server.
-    # ------------------------------------------------------------------
-
-    map_lifecycle_manager = Node(
-        package='nav2_lifecycle_manager',
-        executable='lifecycle_manager',
-        name='map_lifecycle_manager',
-        output='screen',
-        parameters=[
-            {
-                'use_sim_time': use_sim_time,
-                'autostart': True,
-                'node_names': [
-                    'map_server',
-                ],
-            }
-        ],
-    )
-
-    # ------------------------------------------------------------------
-    # AMCL - Robot 1
-    # ------------------------------------------------------------------
+    # ============================================================
+    # ROBOT 1 AMCL
+    # ============================================================
 
     amcl_robot1 = Node(
         package='nav2_amcl',
@@ -108,21 +69,29 @@ def generate_launch_description():
         name='amcl',
         namespace='robot1',
         output='screen',
+
         parameters=[
-            amcl_robot1_config,
+            amcl_robot1_file,
+
+            # FORCE ROBOT 1 TF FRAME NAMES
             {
-                'use_sim_time': use_sim_time,
+                'global_frame_id': 'map',
+                'odom_frame_id': 'robot1/odom',
+                'base_frame_id': 'robot1/base_footprint',
+                'tf_broadcast': True,
+                'use_sim_time': True,
             }
         ],
+
         remappings=[
-            ('scan', '/robot1/scan'),
             ('map', '/map'),
-        ],
+            ('map_updates', '/map_updates'),
+        ]
     )
 
-    # ------------------------------------------------------------------
-    # AMCL - Robot 2
-    # ------------------------------------------------------------------
+    # ============================================================
+    # ROBOT 2 AMCL
+    # ============================================================
 
     amcl_robot2 = Node(
         package='nav2_amcl',
@@ -130,21 +99,29 @@ def generate_launch_description():
         name='amcl',
         namespace='robot2',
         output='screen',
+
         parameters=[
-            amcl_robot2_config,
+            amcl_robot2_file,
+
+            # FORCE ROBOT 2 TF FRAME NAMES
             {
-                'use_sim_time': use_sim_time,
+                'global_frame_id': 'map',
+                'odom_frame_id': 'robot2/odom',
+                'base_frame_id': 'robot2/base_footprint',
+                'tf_broadcast': True,
+                'use_sim_time': True,
             }
         ],
+
         remappings=[
-            ('scan', '/robot2/scan'),
             ('map', '/map'),
-        ],
+            ('map_updates', '/map_updates'),
+        ]
     )
 
-    # ------------------------------------------------------------------
-    # AMCL - Robot 3
-    # ------------------------------------------------------------------
+    # ============================================================
+    # ROBOT 3 AMCL
+    # ============================================================
 
     amcl_robot3 = Node(
         package='nav2_amcl',
@@ -152,70 +129,62 @@ def generate_launch_description():
         name='amcl',
         namespace='robot3',
         output='screen',
+
         parameters=[
-            amcl_robot3_config,
+            amcl_robot3_file,
+
+            # FORCE ROBOT 3 TF FRAME NAMES
             {
-                'use_sim_time': use_sim_time,
+                'global_frame_id': 'map',
+                'odom_frame_id': 'robot3/odom',
+                'base_frame_id': 'robot3/base_footprint',
+                'tf_broadcast': True,
+                'use_sim_time': True,
             }
         ],
+
         remappings=[
-            ('scan', '/robot3/scan'),
             ('map', '/map'),
-        ],
+            ('map_updates', '/map_updates'),
+        ]
     )
 
-    # ------------------------------------------------------------------
-    # Lifecycle Manager for AMCL
-    #
-    # Each AMCL is namespaced, so use the fully-qualified node names.
-    # ------------------------------------------------------------------
+    # ============================================================
+    # LIFECYCLE MANAGER
+    # ============================================================
 
-    amcl_lifecycle_manager = Node(
+    lifecycle_manager = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',
-        name='amcl_lifecycle_manager',
+        name='lifecycle_manager_localization',
+        namespace='',
         output='screen',
+
         parameters=[
             {
-                'use_sim_time': use_sim_time,
+                'use_sim_time': True,
                 'autostart': True,
+
                 'node_names': [
-                    '/robot1/amcl',
-                    '/robot2/amcl',
-                    '/robot3/amcl',
+                    'map_server',
+                    'robot1/amcl',
+                    'robot2/amcl',
+                    'robot3/amcl',
                 ],
             }
-        ],
+        ]
     )
 
-    rviz_config = os.path.join(
-        get_package_share_directory('virtual_lab'),
-        'rviz',
-        'multi_robot_navigation.rviz'
-    )
-
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', rviz_config],
-        parameters=[{'use_sim_time': True}],
-        output='screen'
-    )
-
-    # ------------------------------------------------------------------
-    # Launch
-    # ------------------------------------------------------------------
+    # ============================================================
+    # LAUNCH
+    # ============================================================
 
     return LaunchDescription([
-        use_sim_time_arg,
-        rviz_node,
         map_server,
-        map_lifecycle_manager,
 
         amcl_robot1,
         amcl_robot2,
         amcl_robot3,
 
-        amcl_lifecycle_manager,
+        lifecycle_manager,
     ])

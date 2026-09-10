@@ -1,0 +1,54 @@
+[INFO] [launch]: All log files can be found below /home/dhairya/.ros/log/2026-09-10-11-14-07-238285-hp-13229
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [gazebo-1]: process started with pid [13239]
+[INFO] [robot_state_publisher-2]: process started with pid [13241]
+[INFO] [create-3]: process started with pid [13242]
+[INFO] [robot_state_publisher-4]: process started with pid [13243]
+[INFO] [create-5]: process started with pid [13244]
+[INFO] [robot_state_publisher-6]: process started with pid [13245]
+[INFO] [create-7]: process started with pid [13246]
+[INFO] [parameter_bridge-8]: process started with pid [13247]
+[INFO] [image_bridge-9]: process started with pid [13248]
+[robot_state_publisher-2] [INFO] [1789019047.831487119] [robot1.robot_state_publisher]: Robot initialized
+[robot_state_publisher-6] [INFO] [1789019047.833452488] [robot3.robot_state_publisher]: Robot initialized
+[create-5] [INFO] [1789019047.842722634] [ros_gz_sim]: Requesting list of world names.
+[robot_state_publisher-4] [INFO] [1789019047.843053999] [robot2.robot_state_publisher]: Robot initialized
+[create-3] [INFO] [1789019047.849278605] [ros_gz_sim]: Requesting list of world names.
+[create-7] [INFO] [1789019047.852510786] [ros_gz_sim]: Requesting list of world names.
+[create-7] [INFO] [1789019048.364806495] [ros_gz_sim]: Waiting messages on topic [/robot3/robot_description].
+[create-3] [INFO] [1789019048.566144364] [ros_gz_sim]: Waiting messages on topic [/robot1/robot_description].
+[create-7] [INFO] [1789019048.664354730] [ros_gz_sim]: Entity creation successful.
+[create-3] [INFO] [1789019048.664466681] [ros_gz_sim]: Entity creation successful.
+[create-5] [INFO] [1789019048.667135488] [ros_gz_sim]: Waiting messages on topic [/robot2/robot_description].
+[create-5] [INFO] [1789019048.679055768] [ros_gz_sim]: Entity creation successful.
+[INFO] [create-3]: process has finished cleanly [pid 13242]
+[INFO] [create-7]: process has finished cleanly [pid 13246]
+[INFO] [create-5]: process has finished cleanly [pid 13244]
+[parameter_bridge-8] [INFO] [1789019048.868032366] [gz_bridge]: Creating GZ->ROS Bridge: [/clock (gz.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.868782462] [gz_bridge]: Creating ROS->GZ Bridge: [/robot1/cmd_vel (geometry_msgs/msg/Twist) -> /robot1/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.870660100] [gz_bridge]: Creating GZ->ROS Bridge: [/robot1/odom (gz.msgs.Odometry) -> /robot1/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.872621434] [gz_bridge]: Creating GZ->ROS Bridge: [/robot1/scan (gz.msgs.LaserScan) -> /robot1/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.874560559] [gz_bridge]: Creating GZ->ROS Bridge: [/robot1/imu (gz.msgs.IMU) -> /robot1/imu (sensor_msgs/msg/Imu)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.875358696] [gz_bridge]: Creating GZ->ROS Bridge: [/robot1/joint_states (gz.msgs.Model) -> /robot1/joint_states (sensor_msgs/msg/JointState)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.875994334] [gz_bridge]: Creating ROS->GZ Bridge: [/robot2/cmd_vel (geometry_msgs/msg/Twist) -> /robot2/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.876495260] [gz_bridge]: Creating GZ->ROS Bridge: [/robot2/odom (gz.msgs.Odometry) -> /robot2/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.876974847] [gz_bridge]: Creating GZ->ROS Bridge: [/robot2/scan (gz.msgs.LaserScan) -> /robot2/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.877476477] [gz_bridge]: Creating GZ->ROS Bridge: [/robot2/imu (gz.msgs.IMU) -> /robot2/imu (sensor_msgs/msg/Imu)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.877813272] [gz_bridge]: Creating GZ->ROS Bridge: [/robot2/joint_states (gz.msgs.Model) -> /robot2/joint_states (sensor_msgs/msg/JointState)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.878136296] [gz_bridge]: Creating ROS->GZ Bridge: [/robot3/cmd_vel (geometry_msgs/msg/Twist) -> /robot3/cmd_vel (gz.msgs.Twist)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.878563461] [gz_bridge]: Creating GZ->ROS Bridge: [/robot3/odom (gz.msgs.Odometry) -> /robot3/odom (nav_msgs/msg/Odometry)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.878949050] [gz_bridge]: Creating GZ->ROS Bridge: [/robot3/scan (gz.msgs.LaserScan) -> /robot3/scan (sensor_msgs/msg/LaserScan)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.879347052] [gz_bridge]: Creating GZ->ROS Bridge: [/robot3/imu (gz.msgs.IMU) -> /robot3/imu (sensor_msgs/msg/Imu)] (Lazy 0)
+[parameter_bridge-8] [INFO] [1789019048.879700524] [gz_bridge]: Creating GZ->ROS Bridge: [/robot3/joint_states (gz.msgs.Model) -> /robot3/joint_states (sensor_msgs/msg/JointState)] (Lazy 0)
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot3/base_footprint"]/sensor[@name="robot3_imu"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot3/base_footprint"]/sensor[@name="robot3_lidar"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot1/base_footprint"]/sensor[@name="robot1_imu"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot1/base_footprint"]/sensor[@name="robot1_lidar"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot2/base_footprint"]/sensor[@name="robot2_imu"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot2/base_footprint"]/sensor[@name="robot2_lidar"]/gz_frame_id:<urdf-string>:L0]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot1/base_footprint"]/sensor[@name="robot1_imu"]/gz_frame_id:<data-string>:L116]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot1/base_footprint"]/sensor[@name="robot1_lidar"]/gz_frame_id:<data-string>:L139]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot2/base_footprint"]/sensor[@name="robot2_imu"]/gz_frame_id:<data-string>:L116]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot2/base_footprint"]/sensor[@name="robot2_lidar"]/gz_frame_id:<data-string>:L139]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot3/base_footprint"]/sensor[@name="robot3_imu"]/gz_frame_id:<data-string>:L116]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].
+[gazebo-1] [1;33mWarning [Utils.cc:132][0m [/sdf/model[@name="mogi_bot"]/link[@name="robot3/base_footprint"]/sensor[@name="robot3_lidar"]/gz_frame_id:<data-string>:L139]: XML Element[gz_frame_id], child of element[sensor], not defined in SDF. Copying[gz_frame_id] as children of [sensor].

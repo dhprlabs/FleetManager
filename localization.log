@@ -1,0 +1,194 @@
+[INFO] [launch]: All log files can be found below /home/dhairya/.ros/log/2026-09-10-13-42-07-610536-hp-33043
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [rviz2-1]: process started with pid [33055]
+[INFO] [map_server-2]: process started with pid [33056]
+[INFO] [lifecycle_manager-3]: process started with pid [33057]
+[INFO] [amcl-4]: process started with pid [33058]
+[INFO] [amcl-5]: process started with pid [33059]
+[INFO] [amcl-6]: process started with pid [33060]
+[INFO] [lifecycle_manager-7]: process started with pid [33061]
+[amcl-6] [INFO] [1789027927.841936857] [robot3.amcl]: 
+[amcl-6] 	amcl lifecycle node launched. 
+[amcl-6] 	Waiting on external lifecycle transitions to activate
+[amcl-6] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[amcl-6] [INFO] [1789027927.842534171] [robot3.amcl]: Creating
+[lifecycle_manager-7] [INFO] [1789027927.848822404] [amcl_lifecycle_manager]: Creating
+[lifecycle_manager-7] [INFO] [1789027927.860962372] [amcl_lifecycle_manager]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[lifecycle_manager-3] [INFO] [1789027927.863756599] [map_lifecycle_manager]: Creating
+[lifecycle_manager-3] [INFO] [1789027927.880136363] [map_lifecycle_manager]: [34m[1mCreating and initializing lifecycle service clients[0m[0m
+[amcl-5] [INFO] [1789027927.886206995] [robot2.amcl]: 
+[amcl-5] 	amcl lifecycle node launched. 
+[amcl-5] 	Waiting on external lifecycle transitions to activate
+[amcl-5] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[amcl-5] [INFO] [1789027927.887000204] [robot2.amcl]: Creating
+[amcl-4] [INFO] [1789027927.899276962] [robot1.amcl]: 
+[amcl-4] 	amcl lifecycle node launched. 
+[amcl-4] 	Waiting on external lifecycle transitions to activate
+[amcl-4] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[amcl-4] [INFO] [1789027927.899954527] [robot1.amcl]: Creating
+[map_server-2] [INFO] [1789027927.904022845] [map_server]: 
+[map_server-2] 	map_server lifecycle node launched. 
+[map_server-2] 	Waiting on external lifecycle transitions to activate
+[map_server-2] 	See https://design.ros2.org/articles/node_lifecycle.html for more information.
+[map_server-2] [INFO] [1789027927.904248591] [map_server]: Creating
+[lifecycle_manager-3] [INFO] [1789027928.259305973] [map_lifecycle_manager]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-3] [INFO] [1789027928.259416589] [map_lifecycle_manager]: [34m[1mConfiguring map_server[0m[0m
+[lifecycle_manager-7] [INFO] [1789027928.500688877] [amcl_lifecycle_manager]: [34m[1mStarting managed nodes bringup...[0m[0m
+[lifecycle_manager-7] [INFO] [1789027928.500789005] [amcl_lifecycle_manager]: [34m[1mConfiguring /robot1/amcl[0m[0m
+[amcl-4] [INFO] [1789027928.501606271] [robot1.amcl]: Configuring
+[amcl-4] [INFO] [1789027928.501779957] [robot1.amcl]: initTransforms
+[amcl-4] [INFO] [1789027928.524353598] [robot1.amcl]: initPubSub
+[amcl-4] [INFO] [1789027928.544375713] [robot1.amcl]: Subscribed to map topic.
+[lifecycle_manager-7] [INFO] [1789027928.556783079] [amcl_lifecycle_manager]: [34m[1mConfiguring /robot2/amcl[0m[0m
+[amcl-5] [INFO] [1789027928.557870250] [robot2.amcl]: Configuring
+[amcl-5] [INFO] [1789027928.558021888] [robot2.amcl]: initTransforms
+[amcl-5] [INFO] [1789027928.575129048] [robot2.amcl]: initPubSub
+[map_server-2] [INFO] [1789027928.577859118] [map_server]: Configuring
+[map_server-2] [INFO] [1789027928.578029833] [map_io]: Loading yaml file: /home/dhairya/FleetManager/install/virtual_lab/share/virtual_lab/maps/logistics_warehouse.yaml
+[map_server-2] [INFO] [1789027928.578645531] [map_io]: resolution: 0.05
+[map_server-2] [INFO] [1789027928.578668571] [map_io]: origin[0]: -5.807
+[map_server-2] [INFO] [1789027928.578677981] [map_io]: origin[1]: -7.229
+[map_server-2] [INFO] [1789027928.578684215] [map_io]: origin[2]: 0
+[map_server-2] [INFO] [1789027928.578692135] [map_io]: free_thresh: 0.196
+[map_server-2] [INFO] [1789027928.578700447] [map_io]: occupied_thresh: 0.65
+[map_server-2] [INFO] [1789027928.578712589] [map_io]: mode: trinary
+[map_server-2] [INFO] [1789027928.578723181] [map_io]: negate: 0
+[map_server-2] [INFO] [1789027928.579328358] [map_io]: Loading image_file: /home/dhairya/FleetManager/install/virtual_lab/share/virtual_lab/maps/logistics_warehouse.pgm
+[map_server-2] [INFO] [1789027928.586447653] [map_io]: Read map /home/dhairya/FleetManager/install/virtual_lab/share/virtual_lab/maps/logistics_warehouse.pgm: 485 X 484 map @ 0.05 m/cell
+[amcl-5] [INFO] [1789027928.594776466] [robot2.amcl]: Subscribed to map topic.
+[lifecycle_manager-7] [INFO] [1789027928.603168744] [amcl_lifecycle_manager]: [34m[1mConfiguring /robot3/amcl[0m[0m
+[lifecycle_manager-3] [INFO] [1789027928.603242519] [map_lifecycle_manager]: [34m[1mActivating map_server[0m[0m
+[map_server-2] [INFO] [1789027928.603380943] [map_server]: Activating
+[amcl-6] [INFO] [1789027928.603643133] [robot3.amcl]: Configuring
+[amcl-6] [INFO] [1789027928.603776605] [robot3.amcl]: initTransforms
+[map_server-2] [INFO] [1789027928.604053396] [map_server]: Creating bond (map_server) to lifecycle manager.
+[amcl-4] [INFO] [1789027928.604826008] [robot1.amcl]: Received a 485 X 484 map @ 0.050 m/pix
+[amcl-5] [INFO] [1789027928.604890247] [robot2.amcl]: Received a 485 X 484 map @ 0.050 m/pix
+[rviz2-1] [INFO] [1789027928.613799071] [rviz2]: Stereo is NOT SUPPORTED
+[rviz2-1] [INFO] [1789027928.614075550] [rviz2]: OpenGl version: 4.6 (GLSL 4.6)
+[amcl-6] [INFO] [1789027928.623395906] [robot3.amcl]: initPubSub
+[amcl-6] [INFO] [1789027928.642372712] [robot3.amcl]: Subscribed to map topic.
+[lifecycle_manager-7] [INFO] [1789027928.654661785] [amcl_lifecycle_manager]: [34m[1mActivating /robot1/amcl[0m[0m
+[amcl-4] [INFO] [1789027928.655050970] [robot1.amcl]: Activating
+[amcl-4] [INFO] [1789027928.655149649] [robot1.amcl]: Creating bond (amcl) to lifecycle manager.
+[amcl-6] [INFO] [1789027928.656217063] [robot3.amcl]: Received a 485 X 484 map @ 0.050 m/pix
+[rviz2-1] [INFO] [1789027928.666846632] [rviz2]: Stereo is NOT SUPPORTED
+[lifecycle_manager-3] [INFO] [1789027928.718647174] [map_lifecycle_manager]: Server map_server connected with bond.
+[lifecycle_manager-3] [INFO] [1789027928.718789132] [map_lifecycle_manager]: [34m[1mManaged nodes are active[0m[0m
+[lifecycle_manager-3] [INFO] [1789027928.718808876] [map_lifecycle_manager]: [34m[1mCreating bond timer...[0m[0m
+[rviz2-1] [INFO] [1789027929.000244769] [rviz2]: Subscribing to: /cost_cloud
+[rviz2-1] 
+[rviz2-1] [INFO] [1789027929.137663919] [rviz2]: Subscribing to: /cost_cloud
+[rviz2-1] 
+[rviz2-1] [WARN] [1789027929.265257017] [rcl.logging_rosout]: Publisher already registered for node name: 'rviz2'. If this is due to multiple nodes with the same name then all logs for the logger named 'rviz2' will go out over the existing publisher. As soon as any node with that name is destructed it will unregister the publisher, preventing any further logs for that name from being published on the rosout topic.
+[rviz2-1] [INFO] [1789027929.293082098] [rviz2]: Trying to load plugins...
+[rviz2-1] [INFO] [1789027929.389490098] [rviz2]: Trying to create a map of size 485 x 484 using 1 swatches
+[rviz2-1] [ERROR] [1789027929.397222880] [rviz2]: rviz/glsl120/indexed_8bit_image.vert
+[rviz2-1] rviz/glsl120/indexed_8bit_image.frag
+[rviz2-1]  GLSL link result : 
+[rviz2-1] active samplers with a different type refer to the same texture image unit
+[amcl-5] [INFO] [1789027930.277820362] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 14.000 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027930.279744313] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 14.000 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027930.312590405] [rviz2]: controller_server service not available
+[lifecycle_manager-7] [ERROR] [1789027930.669125350] [amcl_lifecycle_manager]: Server /robot1/amcl was unable to be reached after 4.00s by bond. This server may be misconfigured.
+[lifecycle_manager-7] [ERROR] [1789027930.669456329] [amcl_lifecycle_manager]: Failed to bring up all requested nodes. Aborting bringup.
+[rviz2-1] [INFO] [1789027931.345227762] [rviz2]: planner_server service not available
+[amcl-6] [INFO] [1789027931.653472954] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 14.800 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027932.379433466] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027933.414318801] [rviz2]: smoother_server service not available
+[rviz2-1] [INFO] [1789027934.457468440] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027934.473798601] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027934.473907335] [rviz2]: Trying to load plugins...
+[amcl-5] [INFO] [1789027934.627597651] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 16.600 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027934.636592744] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 16.600 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027935.494596677] [rviz2]: controller_server service not available
+[amcl-6] [INFO] [1789027935.999345508] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 17.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027936.536561924] [rviz2]: planner_server service not available
+[rviz2-1] [INFO] [1789027937.572368228] [rviz2]: controller_server service not available
+[amcl-5] [INFO] [1789027938.435497927] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 19.100 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027938.442714577] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 19.100 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027938.598677333] [rviz2]: smoother_server service not available
+[amcl-6] [INFO] [1789027939.462262367] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 19.900 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027939.621472424] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027939.635686516] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027939.635756860] [rviz2]: Trying to load plugins...
+[rviz2-1] [INFO] [1789027940.649855966] [rviz2]: controller_server service not available
+[amcl-5] [INFO] [1789027941.546330680] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 21.600 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027941.675718437] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 21.700 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027941.683113470] [rviz2]: planner_server service not available
+[amcl-6] [INFO] [1789027942.457663735] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 22.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027942.708838687] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027943.735680878] [rviz2]: smoother_server service not available
+[amcl-5] [INFO] [1789027944.465032670] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 24.200 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027944.572457628] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 24.300 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027944.763373622] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027944.776560061] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027944.776656036] [rviz2]: Trying to load plugins...
+[amcl-6] [INFO] [1789027945.629717823] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 25.000 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027945.803198556] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027946.838740090] [rviz2]: planner_server service not available
+[rviz2-1] [INFO] [1789027947.881191294] [rviz2]: controller_server service not available
+[amcl-5] [INFO] [1789027948.389427892] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 26.700 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027948.533606950] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 26.800 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027948.916853791] [rviz2]: smoother_server service not available
+[amcl-6] [INFO] [1789027949.798608172] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 27.600 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027949.949233980] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027949.966652328] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027949.966788289] [rviz2]: Trying to load plugins...
+[rviz2-1] [INFO] [1789027950.991339239] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027952.026461223] [rviz2]: planner_server service not available
+[amcl-5] [INFO] [1789027952.028869686] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 29.300 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027952.197457806] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 29.400 for reason 'discarding message because the queue is full'
+[amcl-6] [INFO] [1789027953.038960649] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 30.100 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027953.066611253] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027954.094387676] [rviz2]: smoother_server service not available
+[rviz2-1] [INFO] [1789027955.136090574] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027955.160114352] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027955.160358127] [rviz2]: Trying to load plugins...
+[amcl-5] [INFO] [1789027955.595542358] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 31.800 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027955.769710590] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 31.900 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027956.178501838] [rviz2]: controller_server service not available
+[amcl-6] [INFO] [1789027956.941991234] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 32.600 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027957.224479035] [rviz2]: planner_server service not available
+[rviz2-1] [INFO] [1789027958.271427978] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027959.306872600] [rviz2]: smoother_server service not available
+[amcl-5] [INFO] [1789027959.672463836] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 34.300 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027959.848906501] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 34.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027960.352893128] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027960.374646067] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027960.374774566] [rviz2]: Trying to load plugins...
+[amcl-6] [INFO] [1789027961.236986169] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 35.200 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027961.396586963] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027962.446770414] [rviz2]: planner_server service not available
+[rviz2-1] [INFO] [1789027963.480475762] [rviz2]: controller_server service not available
+[amcl-5] [INFO] [1789027963.768845409] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 36.800 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027963.942454021] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 36.900 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027964.516522170] [rviz2]: smoother_server service not available
+[amcl-6] [INFO] [1789027965.384689902] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 37.800 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027965.554668579] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027965.574731187] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027965.574828685] [rviz2]: Trying to load plugins...
+[rviz2-1] [INFO] [1789027966.598282065] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027967.642075962] [rviz2]: planner_server service not available
+[amcl-5] [INFO] [1789027968.027154853] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 39.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027968.034579427] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 39.400 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027968.678412581] [rviz2]: controller_server service not available
+[amcl-6] [INFO] [1789027969.105240204] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 40.300 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027969.702382478] [rviz2]: smoother_server service not available
+[rviz2-1] [INFO] [1789027970.724941418] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027970.736541973] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027970.736625782] [rviz2]: Trying to load plugins...
+[amcl-5] [INFO] [1789027970.933678036] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 41.900 for reason 'discarding message because the queue is full'
+[amcl-4] [INFO] [1789027971.040311552] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 42.000 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027971.752393686] [rviz2]: controller_server service not available
+[amcl-6] [INFO] [1789027972.099248080] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 42.900 for reason 'discarding message because the queue is full'
+[rviz2-1] [INFO] [1789027972.778446453] [rviz2]: planner_server service not available
+[rviz2-1] [INFO] [1789027973.803472720] [rviz2]: controller_server service not available
+[amcl-5] [INFO] [1789027973.902166464] [robot2.amcl]: Message Filter dropping message: frame 'robot2/lidar_link' at time 44.500 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[amcl-4] [INFO] [1789027973.907797053] [robot1.amcl]: Message Filter dropping message: frame 'robot1/lidar_link' at time 44.500 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027974.828388272] [rviz2]: smoother_server service not available
+[amcl-6] [INFO] [1789027975.202347854] [robot3.amcl]: Message Filter dropping message: frame 'robot3/lidar_link' at time 45.500 for reason 'the timestamp on the message is earlier than all the data in the transform cache'
+[rviz2-1] [INFO] [1789027975.873018759] [rviz2]: controller_server service not available
+[rviz2-1] [INFO] [1789027975.893706277] [rviz2]: Failed to load plugins. Retrying...
+[rviz2-1] [INFO] [1789027975.893855158] [rviz2]: Trying to load plugins...
+[rviz2-1] [INFO] [1789027976.920742890] [rviz2]: controller_server service not available

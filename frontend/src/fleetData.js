@@ -1,19 +1,13 @@
 export const robots = [
-    { id: 'R-01', x: 120, y: 480, state: 'active', task: 'Pallet move — Bay 3', battery: 81, online: true },
-    { id: 'R-02', x: 420, y: 180, state: 'active', task: 'Restock — Aisle 12', battery: 64, online: true },
-    { id: 'R-03', x: 640, y: 520, state: 'active', task: 'Return to dock', battery: 47, online: true },
-    { id: 'R-04', x: 520, y: 380, state: 'active', task: 'Pallet move — Bay 7', battery: 73, online: true },
-    { id: 'R-05', x: 760, y: 220, state: 'warn', task: 'Restock — Aisle 4', battery: 18, online: true },
-    { id: 'R-06', x: 340, y: 250, state: 'active', task: 'Idle at charger', battery: 96, online: true },
-    { id: 'R-07', x: 200, y: 150, state: 'offline', task: '—', battery: 0, online: false },
-    { id: 'R-08', x: 830, y: 470, state: 'active', task: 'Inspection sweep — Zone D', battery: 58, online: true },
+    { id: 'R-01', x: 120, y: 480, state: 'active', task: 'Pallet move — Bay 3', battery: 81, online: true, color: '#3978b7', colorDim: '#e4edf7' },
+    { id: 'R-02', x: 420, y: 180, state: 'active', task: 'Restock — Aisle 12', battery: 64, online: true, color: '#7b61a8', colorDim: '#eee9f6' },
+    { id: 'R-03', x: 640, y: 520, state: 'active', task: 'Return to dock', battery: 47, online: true, color: '#c98a2e', colorDim: '#f7eddb' },
+    { id: 'R-04', x: 520, y: 380, state: 'active', task: 'Pallet move — Bay 7', battery: 73, online: true, color: '#2b9aa0', colorDim: '#e1f1f2' },
 ]
 
 export const initialTasks = [
-    { name: 'Pallet move — Bay 3', assigned: true, robot: 'R-01', progress: 62 },
-    { name: 'Restock — Aisle 12', assigned: true, robot: 'R-02', progress: 28 },
-    { name: 'Inspection sweep — Zone D', assigned: true, robot: 'R-08', progress: 80 },
-    { name: 'Return empty carts — Dock 2', assigned: false, robot: null, progress: 0 },
+    { number: 1, name: 'Task 1', assigned: false, robot: null, progress: 0, start: { x: 117, y: 158 }, end: { x: 319, y: 433 } },
+    { number: 2, name: 'Task 2', assigned: false, robot: null, progress: 0, start: { x: 690, y: 125 }, end: { x: 806, y: 462 } },
 ]
 
 export const ganttRows = [

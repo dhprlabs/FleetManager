@@ -1,5 +1,35 @@
 @import "tailwindcss";
 
+@keyframes map-toast-in-out {
+	0% {
+		opacity: 0;
+		transform: translate(-50%, 18px);
+	}
+	12%, 82% {
+		opacity: 1;
+		transform: translate(-50%, 0);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(-50%, 18px);
+	}
+}
+
+@keyframes map-toast-in-out-right {
+	0% {
+		opacity: 0;
+		transform: translateY(18px);
+	}
+	12%, 82% {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(18px);
+	}
+}
+
 * {
 	scrollbar-width: thin;
 	scrollbar-color: #c7cec9 transparent;

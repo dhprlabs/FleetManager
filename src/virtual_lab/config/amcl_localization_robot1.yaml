@@ -40,10 +40,10 @@ amcl:
     scan_topic: scan
     set_initial_pose: true
     initial_pose:
-      x: 4.88
-      y: -6.30
-      z: 0.0
-      yaw: 1.57
+      x: -10.7947
+      y: 0.5379
+      z: 0.1996
+      yaw: 0.0
 
 map_server:
   ros__parameters:

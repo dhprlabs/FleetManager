@@ -1,0 +1,5 @@
+# Request to create a new task
+fleet_interfaces/Task task
+---
+bool success
+string message

@@ -37,7 +37,9 @@ setup(
             'reservation_manager = fleet_manager.reservation_manager:main',
             'conflict_resolver = fleet_manager.conflict_resolver:main',
             'nav2_bridge = fleet_manager.nav2_bridge:main',
+            'task_execution_manager = fleet_manager.task_execution_manager:main',
             'p2p_transport = fleet_manager.p2p_transport:main',
+            'fleet_visualizer = fleet_manager.fleet_visualizer:main',
         ],
     },
 )

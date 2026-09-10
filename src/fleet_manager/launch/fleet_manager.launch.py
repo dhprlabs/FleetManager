@@ -19,6 +19,7 @@ DEFAULT_SPAWN_POSES = {
 def launch_setup(context, *args, **kwargs):
     robots_str = LaunchConfiguration('robots').perform(context)
     launch_broadcaster = LaunchConfiguration('launch_broadcaster').perform(context).lower() == 'true'
+    launch_visualizer = LaunchConfiguration('launch_visualizer').perform(context).lower() == 'true'
     auto_generate = LaunchConfiguration('auto_generate_tasks').perform(context).lower() == 'true'
     comm_radius = float(LaunchConfiguration('communication_radius').perform(context))
     dropout_rate = float(LaunchConfiguration('packet_dropout_rate').perform(context))
@@ -147,6 +148,22 @@ def launch_setup(context, *args, **kwargs):
             )
         )
 
+    # 3. Fleet Visualizer (single global node — no robot namespace)
+    if launch_visualizer:
+        actions.append(
+            Node(
+                package='fleet_manager',
+                executable='fleet_visualizer',
+                name='fleet_visualizer',
+                output='screen',
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'frame_id': 'map',
+                    'publish_rate': 2.0,
+                }]
+            )
+        )
+
     return actions
 
 
@@ -169,7 +186,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'auto_generate_tasks',
-            default_value='true',
+            default_value='false',
             description='Whether the broadcaster automatically publishes sample tasks T1-T5'
         ),
         DeclareLaunchArgument(
@@ -196,6 +213,11 @@ def generate_launch_description():
             'broadcast_radius',
             default_value='6.0',
             description='Wireless transmission radius of dock station broadcaster'
+        ),
+        DeclareLaunchArgument(
+            'launch_visualizer',
+            default_value='true',
+            description='Whether to launch the RViz fleet_visualizer marker publisher'
         ),
         OpaqueFunction(function=launch_setup),
     ])

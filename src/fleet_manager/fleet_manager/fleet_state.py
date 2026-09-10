@@ -151,17 +151,39 @@ class FleetState:
 
     def merge_task(self, entry: TaskEntry) -> bool:
         """
-        Merge a received task state entry (LWW).
+        Merge a received task state entry (LWW + monotonic state guard).
+
+        Monotonicity rule: task lifecycle state is irreversible.
+        A task at state N (e.g. IN_PROGRESS=2) must NEVER be overwritten
+        by an incoming entry with state < N (e.g. AVAILABLE=0), regardless
+        of Lamport clock. This prevents late-joining robots with stale world
+        views from resetting already-progressed tasks.
+
         Returns True if the entry changed local state.
         """
         existing = self._tasks.get(entry.task_id)
-        if existing is None or self._lww_wins(
+        if existing is None:
+            self._tasks[entry.task_id] = entry
+            self.advance(entry.lamport_clock)
+            return True
+
+        # Monotonic state guard: only allow state transitions that move
+        # forward in the lifecycle (higher state value wins unconditionally)
+        if entry.state > existing.state:
+            self._tasks[entry.task_id] = entry
+            self.advance(entry.lamport_clock)
+            return True
+
+        # Same state level: fall back to standard LWW clock comparison
+        if entry.state == existing.state and self._lww_wins(
             entry.lamport_clock, entry.source_robot_id,
             existing.lamport_clock, existing.source_robot_id
         ):
             self._tasks[entry.task_id] = entry
             self.advance(entry.lamport_clock)
             return True
+
+        # Incoming state is lower than existing — silently discard
         return False
 
     def update_own_task(self, entry: TaskEntry) -> TaskEntry:

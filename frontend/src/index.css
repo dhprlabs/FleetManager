@@ -1,0 +1,75 @@
+@import "tailwindcss";
+
+@keyframes map-toast-in-out {
+	0% {
+		opacity: 0;
+		transform: translate(-50%, 18px);
+	}
+	12%, 82% {
+		opacity: 1;
+		transform: translate(-50%, 0);
+	}
+	100% {
+		opacity: 0;
+		transform: translate(-50%, 18px);
+	}
+}
+
+@keyframes map-toast-in-out-right {
+	0% {
+		opacity: 0;
+		transform: translateY(18px);
+	}
+	12% {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	14% {
+		opacity: 1;
+		transform: translate(-4px, 0);
+	}
+	16% {
+		opacity: 1;
+		transform: translate(4px, 0);
+	}
+	18%, 82% {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	100% {
+		opacity: 0;
+		transform: translateY(18px);
+	}
+}
+
+* {
+	scrollbar-width: thin;
+	scrollbar-color: #c7cec9 transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+	border: 1px solid transparent;
+	border-radius: 999px;
+	background: #c7cec9;
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+	background: #aeb9b1;
+	background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-button {
+	display: none;
+	width: 0;
+	height: 0;
+}

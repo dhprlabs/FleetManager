@@ -5,6 +5,7 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Map1
+        - /MarkerArray1
       Splitter Ratio: 0.5299999713897705
     Tree Height: 299
   - Class: rviz_common/Selection
@@ -744,6 +745,18 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: Robot 3
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: MarkerArray
+      Namespaces:
+        fleet_tasks: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /fleet/task_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48

@@ -16,9 +16,11 @@ Responsibilities:
 import json
 import rclpy
 from rclpy.node import Node
+from typing import List, Optional, Set
 
 from fleet_interfaces.msg import (
     MaxSumMessage,
+    P2PNeighborList,
     TaskOwnership,
     WorldView,
     Task,
@@ -77,6 +79,11 @@ class MaxSumAllocator(Node):
         self.world_view_sub = self.create_subscription(
             WorldView, 'world_view', self._handle_world_view, 10
         )
+        # Track current reachable peers from P2P transport
+        self.reachable_peers: Set[str] = set()
+        self.neighbors_sub = self.create_subscription(
+            P2PNeighborList, 'p2p_neighbors', self._handle_neighbors, 10
+        )
 
         # Publishers
         self.ownership_pub = self.create_publisher(TaskOwnership, 'task_ownership', 10)
@@ -101,6 +108,13 @@ class MaxSumAllocator(Node):
         """Stores the latest distributed fleet world view."""
         self.latest_world_view = msg
 
+    def _handle_neighbors(self, msg: P2PNeighborList):
+        """Tracks which peers are currently in communication range."""
+        self.reachable_peers = set(msg.reachable_peers)
+        self.get_logger().debug(
+            f'[{self.robot_id}] Reachable peers: {self.reachable_peers}'
+        )
+
     def _handle_p2p_maxsum(self, sender_id: str, message_type: str, payload: dict):
         """Processes incoming Max-Sum messages delivered over P2P RF channel."""
         self.get_logger().debug(
@@ -112,12 +126,18 @@ class MaxSumAllocator(Node):
 
     def trigger_allocation_cycle(self):
         """
-        Runs one Max-Sum task allocation cycle over available tasks and known peers.
+        Runs one Max-Sum task allocation cycle.
+
+        Key constraints:
+        - Only robots reachable via P2P (in comms range) are included.
+          A late-joining robot will only see itself until it connects.
+        - Only STATE_AVAILABLE tasks are bid on.
+        - Tasks already owned by this robot are skipped (no double-bidding).
         """
         if not self.latest_world_view:
             return
 
-        # 1. Collect reachable/known robots
+        # 1. Collect robots: self + peers that are currently IN comms range
         robots_info = []
         own = self.latest_world_view.own_state
         robots_info.append(RobotInfo(
@@ -129,19 +149,30 @@ class MaxSumAllocator(Node):
         ))
 
         for peer in self.latest_world_view.peer_states:
+            # ── Phase 8 Gate ──────────────────────────────────────────────
+            # Only include peers that are currently in comms range.
+            # If reachable_peers is empty (P2P not yet initialised or truly
+            # isolated), fall back to including all known peers so the robot
+            # can still allocate tasks to itself on first boot.
+            if self.reachable_peers and peer.robot_id not in self.reachable_peers:
+                self.get_logger().debug(
+                    f'[{self.robot_id}] Skipping out-of-range peer {peer.robot_id} in Max-Sum'
+                )
+                continue
             robots_info.append(RobotInfo(
                 robot_id=peer.robot_id,
                 x=peer.current_pose.pose.position.x,
                 y=peer.current_pose.pose.position.y,
                 battery_level=peer.battery_level,
-                current_workload=0,  # peer workload estimation
+                current_workload=0,
             ))
 
-        # 2. Collect available (unassigned) tasks
+        # 2. Collect available (unassigned) tasks — exclude already-owned
         available_tasks = []
         for t in self.latest_world_view.task_states:
             if t.state == Task.STATE_AVAILABLE:
-                # Pickup is pickup_pose, delivery is dropoff_pose
+                if t.task_id in self.my_owned_tasks:
+                    continue  # This robot already owns it; no need to re-bid
                 available_tasks.append(TaskInfo(
                     task_id=t.task_id,
                     pickup_x=t.pickup_pose.pose.position.x,
@@ -155,8 +186,9 @@ class MaxSumAllocator(Node):
             return
 
         self.get_logger().info(
-            f'[{self.robot_id}] ──► Triggering Max-Sum allocation cycle for '
-            f'{len(available_tasks)} tasks across {len(robots_info)} robots.'
+            f'[{self.robot_id}] ──► Max-Sum cycle | '
+            f'{len(available_tasks)} available tasks | '
+            f'{len(robots_info)} robots in range (peers: {[r.robot_id for r in robots_info[1:]]})'
         )
 
         # 3. Run multi-round Max-Sum allocation

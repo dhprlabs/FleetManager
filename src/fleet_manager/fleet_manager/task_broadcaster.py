@@ -24,7 +24,7 @@ class TaskBroadcaster(Node):
 
         # Parameters
         self.declare_parameter('publish_rate', 1.0)
-        self.declare_parameter('auto_generate_sample_tasks', True)
+        self.declare_parameter('auto_generate_sample_tasks', False)
         self.declare_parameter('warehouse_frame', 'map')
         self.declare_parameter('dock_x', -9.9734)
         self.declare_parameter('dock_y', -1.4383)
@@ -52,6 +52,11 @@ class TaskBroadcaster(Node):
         self.task_event_pub = self.create_publisher(Task, '/fleet/task_events', 10)
         # Wireless medium publisher for P2P-constrained dock transmission
         self.wireless_packet_pub = self.create_publisher(P2PMessage, '/fleet/wireless_packets', 10)
+
+        # Subscription for frontend batch broadcast
+        self.batch_task_sub = self.create_subscription(
+            TaskPool, '/fleet/broadcast_tasks', self.handle_broadcast_tasks, 10
+        )
 
         # Services
         self.create_task_srv = self.create_service(
@@ -195,6 +200,37 @@ class TaskBroadcaster(Node):
         response.success = True
         response.message = f"Task {task.task_id} successfully broadcasted as AVAILABLE"
         return response
+
+    def handle_broadcast_tasks(self, msg: TaskPool):
+        """Receives a batch of tasks from frontend and broadcasts them to the fleet."""
+        if not msg.tasks:
+            self.get_logger().warn('Received empty task batch on /fleet/broadcast_tasks')
+            return
+
+        now = self.get_clock().now().to_msg()
+        added_ids = []
+        for task in msg.tasks:
+            if not task.task_id:
+                task.task_id = f'T{len(self.tasks) + 1}'
+
+            task.state = Task.STATE_AVAILABLE
+            task.assigned_robot_id = ''
+            task.creation_time = now
+            task.version = 1
+            if task.priority <= 0:
+                task.priority = 1
+
+            self.tasks[task.task_id] = task
+            self.task_event_pub.publish(task)
+            added_ids.append(task.task_id)
+            self.get_logger().info(
+                f'Batch task added: {task.task_id} (AVAILABLE) | '
+                f'Pickup: ({task.pickup_pose.pose.position.x:.2f}, {task.pickup_pose.pose.position.y:.2f}) -> '
+                f'Dropoff: ({task.dropoff_pose.pose.position.x:.2f}, {task.dropoff_pose.pose.position.y:.2f})'
+            )
+
+        self.get_logger().info(f'Broadcasted batch of {len(added_ids)} tasks to fleet: {added_ids}')
+        self.publish_task_pool()
 
     def handle_generate_sample_tasks(self, request, response):
         count = request.count if request.count > 0 else 5

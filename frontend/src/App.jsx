@@ -346,7 +346,8 @@ function MapPanel({ selectionMode, selectedPoints, tasks, onPointSelect }) {
                 </div>
             )}
             {blockedMessage && (
-                <div className="pointer-events-none fixed bottom-4 right-4 z-50 animate-[map-toast-in-out-right_3.2s_ease-in-out_forwards] rounded-[9px] border border-[#efc7c2] bg-white px-3.5 py-2 text-center text-xs font-medium text-[#c0453b] shadow-[0_4px_14px_rgb(27_35_31_/_14%)]">
+                <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex max-w-[min(360px,calc(100vw-2rem))] items-center gap-2.5 animate-[map-toast-in-out-right_3.2s_ease-in-out_forwards] rounded-[10px] border-2 border-[#c0453b] bg-[#fff5f3] px-4 py-3 text-left text-[13px] font-semibold text-[#a9362f] shadow-[0_6px_22px_rgb(192_69_59_/_30%)]">
+                    <span className="flex h-6 w-6 flex-none items-center justify-center rounded-full bg-[#c0453b] text-sm font-bold text-white">!</span>
                     {blockedMessage}
                 </div>
             )}

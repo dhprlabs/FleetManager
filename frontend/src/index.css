@@ -20,7 +20,19 @@
 		opacity: 0;
 		transform: translateY(18px);
 	}
-	12%, 82% {
+	12% {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	14% {
+		opacity: 1;
+		transform: translate(-4px, 0);
+	}
+	16% {
+		opacity: 1;
+		transform: translate(4px, 0);
+	}
+	18%, 82% {
 		opacity: 1;
 		transform: translateY(0);
 	}

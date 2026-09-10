@@ -9,11 +9,19 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
+def _append_gazebo_resource_path(resource_path):
+    for env_name in ("GZ_SIM_RESOURCE_PATH", "IGN_GAZEBO_RESOURCE_PATH"):
+        existing_path = os.environ.get(env_name, "")
+        os.environ[env_name] = (
+            existing_path + os.pathsep + resource_path if existing_path else resource_path
+        )
+
+
 def generate_launch_description():
     pkg_virtual_lab = get_package_share_directory('virtual_lab')
     
     gazebo_models_path, ignore_last_dir = os.path.split(pkg_virtual_lab)
-    os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
+    _append_gazebo_resource_path(gazebo_models_path)
 
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz', default_value='true',
@@ -35,6 +43,8 @@ def generate_launch_description():
         "urdf",
         LaunchConfiguration('model')  
     ])
+
+    robot_description = Command(['xacro', ' ', urdf_file_path])
 
     world_launch = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
@@ -62,7 +72,7 @@ def generate_launch_description():
         executable="create",
         arguments=[
             "-name", "mogi_bot",
-            "-topic", "robot_description",
+            "-string", Command(['xacro', ' ', urdf_file_path]),
             "-x", "4.88", "-y", "-6.30", "-z", "0.10", "-Y", "1.57"  # Initial spawn position
         ],
         output="screen",
@@ -77,8 +87,10 @@ def generate_launch_description():
         name='robot_state_publisher',
         output='screen',
         parameters=[
-            {'robot_description': Command(['xacro', ' ', urdf_file_path]),
-             'use_sim_time': True},
+            {
+                'robot_description': robot_description,
+                'use_sim_time': True,
+            },
         ],
         remappings=[
             ('/tf', 'tf'),

@@ -8,12 +8,20 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
+def _append_gazebo_resource_path(resource_path):
+    for env_name in ("GZ_SIM_RESOURCE_PATH", "IGN_GAZEBO_RESOURCE_PATH"):
+        existing_path = os.environ.get(env_name, "")
+        os.environ[env_name] = (
+            existing_path + os.pathsep + resource_path if existing_path else resource_path
+        )
+
+
 def generate_launch_description():
 
     pkg_virtual_lab = get_package_share_directory('virtual_lab')
 
     gazebo_models_path, ignore_last_dir = os.path.split(pkg_virtual_lab)
-    os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
+    _append_gazebo_resource_path(gazebo_models_path)
 
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz', default_value='true',
@@ -40,7 +48,7 @@ def generate_launch_description():
     localization_params_path = os.path.join(
         get_package_share_directory('virtual_lab'),
         'config',
-        'amcl_localization.yaml'
+        'amcl_localization_robot1.yaml'
     )
 
     map_file_path = os.path.join(

@@ -43,6 +43,11 @@
   gz_type_name: "gz.msgs.Model"
   direction: GZ_TO_ROS
 
+- ros_topic_name: "/robot1/tf"
+  gz_topic_name: "/robot1/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
 
 # ============================================================
 # ROBOT 2
@@ -78,6 +83,11 @@
   gz_type_name: "gz.msgs.Model"
   direction: GZ_TO_ROS
 
+- ros_topic_name: "/robot2/tf"
+  gz_topic_name: "/robot2/tf"
+  ros_type_name: "tf2_msgs/msg/TFMessage"
+  gz_type_name: "gz.msgs.Pose_V"
+  direction: GZ_TO_ROS
 
 # ============================================================
 # ROBOT 3
@@ -113,32 +123,37 @@
   gz_type_name: "gz.msgs.Model"
   direction: GZ_TO_ROS
 
-
-# ============================================================
-# TF
-#
-# Keep TF global.
-# The TF messages themselves must contain:
-#
-# robot1/odom -> robot1/base_footprint
-# robot2/odom -> robot2/base_footprint
-# robot3/odom -> robot3/base_footprint
-#
-# ============================================================
-
-- ros_topic_name: "/tf"
-  gz_topic_name: "/tf"
+- ros_topic_name: "/robot3/tf"
+  gz_topic_name: "/robot3/tf"
   ros_type_name: "tf2_msgs/msg/TFMessage"
   gz_type_name: "gz.msgs.Pose_V"
   direction: GZ_TO_ROS
+
+# # ============================================================
+# # TF
+# #
+# # Keep TF global.
+# # The TF messages themselves must contain:
+# #
+# # robot1/odom -> robot1/base_footprint
+# # robot2/odom -> robot2/base_footprint
+# # robot3/odom -> robot3/base_footprint
+# #
+# # ============================================================
+
+# - ros_topic_name: "/tf"
+#   gz_topic_name: "/tf"
+#   ros_type_name: "tf2_msgs/msg/TFMessage"
+#   gz_type_name: "gz.msgs.Pose_V"
+#   direction: GZ_TO_ROS
 
 
 # ============================================================
 # STATIC TF
 # ============================================================
-
-- ros_topic_name: "/tf_static"
-  gz_topic_name: "/tf_static"
-  ros_type_name: "tf2_msgs/msg/TFMessage"
-  gz_type_name: "gz.msgs.Pose_V"
-  direction: GZ_TO_ROS
+# Removed: the global /tf_static bridge from Gazebo uses VOLATILE
+# QoS, but tf2_ros subscribers require TRANSIENT_LOCAL.  This
+# mismatch causes "incompatible QoS DURABILITY" warnings and the
+# static transforms are silently dropped.
+# robot_state_publisher already publishes all URDF static TFs
+# with correct TRANSIENT_LOCAL QoS, so this bridge is not needed.

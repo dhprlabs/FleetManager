@@ -9,12 +9,20 @@ from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
 
+def _append_gazebo_resource_path(resource_path):
+    for env_name in ("GZ_SIM_RESOURCE_PATH", "IGN_GAZEBO_RESOURCE_PATH"):
+        existing_path = os.environ.get(env_name, "")
+        os.environ[env_name] = (
+            existing_path + os.pathsep + resource_path if existing_path else resource_path
+        )
+
+
 def generate_launch_description():
 
     pkg_virtual_lab = get_package_share_directory('virtual_lab')
 
     gazebo_models_path, ignore_last_dir = os.path.split(pkg_virtual_lab)
-    os.environ["GZ_SIM_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
+    _append_gazebo_resource_path(gazebo_models_path)
 
 
     # =========================================================
@@ -86,7 +94,6 @@ def generate_launch_description():
                 'use_sim_time': True
             }
         ],
-
         remappings=[
             ('/tf', 'tf'),
             ('/tf_static', 'tf_static')
@@ -100,7 +107,7 @@ def generate_launch_description():
 
         arguments=[
             '-name', 'robot1',
-            '-topic', '/robot1/robot_description',
+            '-string', robot1_description,
 
             '-x', '4.88',
             '-y', '-6.30',
@@ -141,7 +148,6 @@ def generate_launch_description():
                 'use_sim_time': True
             }
         ],
-
         remappings=[
             ('/tf', 'tf'),
             ('/tf_static', 'tf_static')
@@ -155,7 +161,7 @@ def generate_launch_description():
 
         arguments=[
             '-name', 'robot2',
-            '-topic', '/robot2/robot_description',
+            '-string', robot2_description,
 
             '-x', '2.0',
             '-y', '-6.30',
@@ -196,7 +202,6 @@ def generate_launch_description():
                 'use_sim_time': True
             }
         ],
-
         remappings=[
             ('/tf', 'tf'),
             ('/tf_static', 'tf_static')
@@ -210,7 +215,7 @@ def generate_launch_description():
 
         arguments=[
             '-name', 'robot3',
-            '-topic', '/robot3/robot_description',
+            '-string', robot3_description,
 
             '-x', '-3.88',
             '-y', '-6.30',
@@ -256,22 +261,92 @@ def generate_launch_description():
     # IMAGE BRIDGE
     # =========================================================
 
-    gz_image_bridge_node = Node(
-        package="ros_gz_image",
-        executable="image_bridge",
+    # gz_image_bridge_node = Node(
+    #     package="ros_gz_image",
+    #     executable="image_bridge",
 
-        arguments=[
-            "/camera/image"
-        ],
+    #     arguments=[
+    #         "/camera/image"
+    #     ],
 
-        output="screen",
+    #     output="screen",
 
-        parameters=[
-            {
-                'use_sim_time': True,
-                'camera.image.compressed.jpeg_quality': 75
-            }
-        ]
+    #     parameters=[
+    #         {
+    #             'use_sim_time': True,
+    #             'camera.image.compressed.jpeg_quality': 75
+    #         }
+    #     ]
+    # )
+
+
+    # =========================================================
+    # TF RELAY: /robotX/tf  →  /tf  (global TF tree)
+    #
+    # The gz bridge publishes each robot's odometry TF to the
+    # namespaced topic /robotX/tf, but TF2 (and Nav2 / AMCL)
+    # only listens on the global /tf topic.  These relay nodes
+    # merge all robot TF streams into /tf so the `map` frame
+    # can be seen by every Nav2 node.
+    # =========================================================
+
+    tf_relay_robot1 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_relay_robot1',
+        output='screen',
+        arguments=['/robot1/tf', '/tf'],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    tf_relay_robot2 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_relay_robot2',
+        output='screen',
+        arguments=['/robot2/tf', '/tf'],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    tf_relay_robot3 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_relay_robot3',
+        output='screen',
+        arguments=['/robot3/tf', '/tf'],
+        parameters=[{'use_sim_time': True}],
+    )
+
+
+    # =========================================================
+    # TF_STATIC RELAY: /robotX/tf_static  →  /tf_static
+    # =========================================================
+
+    tf_static_relay_robot1 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_static_relay_robot1',
+        output='screen',
+        arguments=['/robot1/tf_static', '/tf_static'],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    tf_static_relay_robot2 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_static_relay_robot2',
+        output='screen',
+        arguments=['/robot2/tf_static', '/tf_static'],
+        parameters=[{'use_sim_time': True}],
+    )
+
+    tf_static_relay_robot3 = Node(
+        package='topic_tools',
+        executable='relay',
+        name='tf_static_relay_robot3',
+        output='screen',
+        arguments=['/robot3/tf_static', '/tf_static'],
+        parameters=[{'use_sim_time': True}],
     )
 
 
@@ -300,6 +375,16 @@ def generate_launch_description():
 
     # Bridges
     ld.add_action(gz_bridge_node)
-    ld.add_action(gz_image_bridge_node)
+    # ld.add_action(gz_image_bridge_node)
+
+    # TF relays (namespaced → global /tf)
+    ld.add_action(tf_relay_robot1)
+    ld.add_action(tf_relay_robot2)
+    ld.add_action(tf_relay_robot3)
+
+    # TF_STATIC relays (namespaced → global /tf_static)
+    ld.add_action(tf_static_relay_robot1)
+    ld.add_action(tf_static_relay_robot2)
+    ld.add_action(tf_static_relay_robot3)
 
     return ld

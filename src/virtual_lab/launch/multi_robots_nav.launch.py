@@ -9,8 +9,9 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.actions import PushRosNamespace
+
 from ament_index_python.packages import get_package_share_directory
 
 
@@ -43,20 +44,17 @@ def generate_launch_description():
     map_file = os.path.join(
         pkg_virtual_lab,
         'maps',
-        'room_with_cones.yaml'
+        'logistics_warehouse.yaml'
     )
 
-    localization_params = os.path.join(
-        pkg_virtual_lab,
-        'config',
-        'amcl_localization.yaml'
-    )
+    localization_params_robot1 = os.path.join(pkg_virtual_lab, 'config', 'amcl_localization_robot1.yaml')
+    navigation_params_robot1   = os.path.join(pkg_virtual_lab, 'config', 'navigation_robot1.yaml')
 
-    navigation_params = os.path.join(
-        pkg_virtual_lab,
-        'config',
-        'navigation.yaml'
-    )
+    localization_params_robot2 = os.path.join(pkg_virtual_lab, 'config', 'amcl_localization_robot2.yaml')
+    navigation_params_robot2   = os.path.join(pkg_virtual_lab, 'config', 'navigation_robot2.yaml')
+
+    localization_params_robot3 = os.path.join(pkg_virtual_lab, 'config', 'amcl_localization_robot3.yaml')
+    navigation_params_robot3   = os.path.join(pkg_virtual_lab, 'config', 'navigation_robot3.yaml')
 
     rviz_config = os.path.join(
         pkg_virtual_lab,
@@ -90,18 +88,25 @@ def generate_launch_description():
     # Robot 1
     # =========================================================
 
+    robot1_container = ComposableNodeContainer(
+        package='rclcpp_components',
+        executable='component_container_mt',
+        name='nav2_container',
+        namespace='robot1',
+        output='screen',
+    )
+
     robot1_localization = GroupAction(
         actions=[
-
             PushRosNamespace('robot1'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     localization_launch
                 ),
                 launch_arguments={
+                    'namespace': 'robot1',
                     'map': map_file,
-                    'params_file': localization_params,
+                    'params_file': localization_params_robot1, 
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -109,6 +114,7 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
         ]
@@ -116,15 +122,14 @@ def generate_launch_description():
 
     robot1_navigation = GroupAction(
         actions=[
-
             PushRosNamespace('robot1'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch
                 ),
                 launch_arguments={
-                    'params_file': navigation_params,
+                    'namespace': 'robot1',
+                    'params_file': navigation_params_robot1,
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -132,6 +137,7 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
         ]
@@ -141,18 +147,25 @@ def generate_launch_description():
     # Robot 2
     # =========================================================
 
+    robot2_container = ComposableNodeContainer(
+        package='rclcpp_components',
+        executable='component_container_mt',
+        name='nav2_container',
+        namespace='robot2',
+        output='screen',
+    )
+
     robot2_localization = GroupAction(
         actions=[
-
             PushRosNamespace('robot2'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     localization_launch
                 ),
                 launch_arguments={
+                    'namespace': 'robot2',
                     'map': map_file,
-                    'params_file': localization_params,
+                    'params_file': localization_params_robot2,
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -160,6 +173,7 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
         ]
@@ -167,15 +181,14 @@ def generate_launch_description():
 
     robot2_navigation = GroupAction(
         actions=[
-
             PushRosNamespace('robot2'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch
                 ),
                 launch_arguments={
-                    'params_file': navigation_params,
+                    'namespace': 'robot2',
+                    'params_file': navigation_params_robot2, 
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -183,6 +196,7 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
         ]
@@ -192,18 +206,25 @@ def generate_launch_description():
     # Robot 3
     # =========================================================
 
+    robot3_container = ComposableNodeContainer(
+        package='rclcpp_components',
+        executable='component_container_mt',
+        name='nav2_container',
+        namespace='robot3',
+        output='screen',
+    )
+
     robot3_localization = GroupAction(
         actions=[
-
             PushRosNamespace('robot3'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     localization_launch
                 ),
                 launch_arguments={
+                    'namespace': 'robot3',
                     'map': map_file,
-                    'params_file': localization_params,
+                    'params_file': localization_params_robot3,
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -211,6 +232,7 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
         ]
@@ -218,15 +240,14 @@ def generate_launch_description():
 
     robot3_navigation = GroupAction(
         actions=[
-
             PushRosNamespace('robot3'),
-
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch
                 ),
                 launch_arguments={
-                    'params_file': navigation_params,
+                    'namespace': 'robot3',
+                    'params_file': navigation_params_robot3,
                     'use_sim_time': LaunchConfiguration(
                         'use_sim_time'
                     ),
@@ -234,8 +255,40 @@ def generate_launch_description():
                         'autostart'
                     ),
                     'use_composition': 'False',
+                    'container_name': 'nav2_container',
                 }.items()
             ),
+        ]
+    )
+
+    # =========================================================
+    # GLOBAL MAP SERVER (serves /map for RViz and fleet)
+    # =========================================================
+
+    global_map_server = Node(
+        package='nav2_map_server',
+        executable='map_server',
+        name='map_server',
+        output='screen',
+        parameters=[
+            {
+                'yaml_filename': map_file,
+                'use_sim_time': LaunchConfiguration('use_sim_time')
+            }
+        ]
+    )
+
+    lifecycle_manager_map = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_map',
+        output='screen',
+        parameters=[
+            {
+                'use_sim_time': LaunchConfiguration('use_sim_time'),
+                'autostart': True,
+                'node_names': ['map_server']
+            }
         ]
     )
 
@@ -251,6 +304,9 @@ def generate_launch_description():
             '-d',
             rviz_config
         ],
+        additional_env={
+            'LD_PRELOAD': '/lib/x86_64-linux-gnu/libpthread.so.0',
+        },
         parameters=[
             {
                 'use_sim_time': LaunchConfiguration(
@@ -273,6 +329,9 @@ def generate_launch_description():
         use_sim_time,
         autostart,
         use_rviz,
+
+        global_map_server,
+        lifecycle_manager_map,
 
         robot1_localization,
         robot1_navigation,

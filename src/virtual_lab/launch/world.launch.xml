@@ -1,5 +1,5 @@
 <launch>
-    <arg name="world" default="nav.sdf" description="Name of the gazebo world file" />
+    <arg name="world" default="" description="Name of the gazebo world file" />
     <let name="pkg_basic_urdf" value="$(find-pkg-share virtual_lab)" />
     <let name="pkg_ros_gz_sim" value="$(find-pkg-share ros_gz_sim)" />
     <let name="world_file" value="$(var pkg_basic_urdf)/worlds/$(var world)" />

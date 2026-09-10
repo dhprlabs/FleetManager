@@ -8,10 +8,9 @@
 
   <gazebo>
 
-    <plugin
-      filename="ignition-gazebo-diff-drive-system"
-      name="ignition::gazebo::systems::DiffDrive">
-
+	<plugin
+        filename="gz-sim-diff-drive-system"
+        name="gz::sim::systems::DiffDrive">
       <!-- ===================================================== -->
       <!-- ROBOT-SPECIFIC COMMAND TOPIC -->
       <!-- ===================================================== -->
@@ -56,7 +55,7 @@
 
       <odom_topic>${robot_name}/odom</odom_topic>
 
-      <tf_topic>tf</tf_topic>
+      <tf_topic>/tf</tf_topic>
 
       <frame_id>${robot_name}/odom</frame_id>
 

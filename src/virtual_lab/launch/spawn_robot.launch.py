@@ -13,7 +13,7 @@ def generate_launch_description():
     pkg_virtual_lab = get_package_share_directory('virtual_lab')
     
     gazebo_models_path, ignore_last_dir = os.path.split(pkg_virtual_lab)
-    os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
+    os.environ["GZ_SIM_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
 
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz', default_value='true',
@@ -21,7 +21,7 @@ def generate_launch_description():
     )
 
     world_arg = DeclareLaunchArgument(
-        'world', default_value='room_with_cones.sdf',
+        'world', default_value='logistics_warehouse.sdf',
         description='Name of the Gazebo world file to load'
     )
 
@@ -63,7 +63,7 @@ def generate_launch_description():
         arguments=[
             "-name", "mogi_bot",
             "-topic", "robot_description",
-            "-x", "4.88", "-y", "-6.30", "-z", "0.10", "-Y", "1.57"  # Initial spawn position
+            "-x", "4.88", "-y", "-6.30", "-z", "0.30", "-Y", "1.57"  # Initial spawn position
         ],
         output="screen",
         parameters=[
@@ -94,7 +94,7 @@ def generate_launch_description():
                 "config_file": os.path.join(
                     pkg_virtual_lab,
                     "config",
-                    "gz_bridge.yaml",
+                    "gz_bridge_single.yaml",
                 ),
                 "use_sim_time": True,
             }

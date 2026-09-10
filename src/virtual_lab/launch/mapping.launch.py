@@ -12,15 +12,14 @@ def generate_launch_description():
     pgk_virtual_lab = get_package_share_directory('virtual_lab')
 
     gazebo_models_path, ignore_last_dir = os.path.split(pgk_virtual_lab)
-    os.environ["IGN_GAZEBO_RESOURCE_PATH"] += os.pathsep + gazebo_models_path
-
+    os.environ["GZ_SIM_RESOURCE_PATH"] += os.pathsep + gazebo_models_path 
+    
     rviz_launch_arg = DeclareLaunchArgument(
         'rviz', default_value='true',
         description='Open RViz'
-    )
+    ) 
 
-    rviz_config_arg = DeclareLaunchArgument(
-        'rviz_config', default_value='mapping.rviz',
+    rviz_config_arg = DeclareLaunchArgument( 'rviz_config', default_value='mapping.rviz',
         description='RViz config file'
     )
 

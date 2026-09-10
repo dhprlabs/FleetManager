@@ -42,5 +42,5 @@ amcl:
 map_server:
   ros__parameters:
     use_sim_time: True
-    yaml_filename: "/home/dhairya/Bot/Software/Ros/src/virtual_lab/maps/room_with_cones.yaml"
+    yaml_filename: "/home/dhairya/FleetManager/src/virtual_lab/maps/logistics_warehouse.yaml"
 

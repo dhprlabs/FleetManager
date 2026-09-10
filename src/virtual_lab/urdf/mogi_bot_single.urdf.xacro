@@ -3,15 +3,6 @@
 <robot name="mogi_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- ========================================================= -->
-  <!-- ROBOT NAMESPACE -->
-  <!-- ========================================================= -->
-
-  <xacro:arg name="robot_name" default=""/>
-
-  <xacro:property name="robot_name" value="$(arg robot_name)"/>
-
-
-  <!-- ========================================================= -->
   <!-- GAZEBO + MATERIALS -->
   <!-- ========================================================= -->
 
@@ -24,34 +15,31 @@
   <!-- BASE FOOTPRINT -->
   <!-- ========================================================= -->
 
-  <link name="${robot_name}/base_footprint"/>
+  <link name="base_footprint"/>
 
 
   <!-- ========================================================= -->
   <!-- BASE LINK -->
   <!-- ========================================================= -->
 
-  <joint name="${robot_name}/base_footprint_joint" type="fixed">
+  <joint name="base_footprint_joint" type="fixed">
 
     <origin xyz="0 0 0" rpy="0 0 0"/>
 
-    <parent link="${robot_name}/base_footprint"/>
+    <parent link="base_footprint"/>
 
-    <child link="${robot_name}/base_link"/>
+    <child link="base_link"/>
 
   </joint>
 
 
-  <link name="${robot_name}/base_link">
+  <link name="base_link">
 
     <pose>0 0 0.1 0 0 0</pose>
 
     <inertial>
-
       <mass value="15.0"/>
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <inertia
         ixx="0.0625"
         ixy="0"
@@ -59,89 +47,48 @@
         iyy="0.2125"
         iyz="0"
         izz="0.25"/>
-
     </inertial>
 
-
     <collision name="collision">
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <geometry>
-
         <box size=".4 .2 .1"/>
-
       </geometry>
-
     </collision>
-
 
     <visual name="base_link_visual">
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <geometry>
-
         <mesh filename="package://virtual_lab/meshes/mogi_bot.dae"/>
-
       </geometry>
-
     </visual>
-
-
-    <!-- Rear caster -->
 
     <collision name="rear_caster_collision">
-
       <origin xyz="-0.15 0 -0.05" rpy="0 0 0"/>
-
       <geometry>
-
         <sphere radius="0.0499"/>
-
       </geometry>
-
     </collision>
-
 
     <visual name="rear_caster_visual">
-
       <origin xyz="-0.15 0 -0.05" rpy="0 0 0"/>
-
       <geometry>
-
         <sphere radius="0.05"/>
-
       </geometry>
-
     </visual>
 
-
-    <!-- Front caster -->
-
     <collision name="front_caster_collision">
-
       <origin xyz="0.15 0 -0.05" rpy="0 0 0"/>
-
       <geometry>
-
         <sphere radius="0.0499"/>
-
       </geometry>
-
     </collision>
 
-
     <visual name="front_caster_visual">
-
       <origin xyz="0.15 0 -0.05" rpy="0 0 0"/>
-
       <geometry>
-
         <sphere radius="0.05"/>
-
       </geometry>
-
     </visual>
 
   </link>
@@ -151,15 +98,12 @@
   <!-- LEFT WHEEL -->
   <!-- ========================================================= -->
 
-  <joint
-    type="continuous"
-    name="${robot_name}/left_wheel_joint">
+  <joint type="continuous" name="left_wheel_joint">
 
     <origin xyz="0 0.15 0" rpy="0 0 0"/>
 
-    <child link="${robot_name}/left_wheel"/>
-
-    <parent link="${robot_name}/base_link"/>
+    <child link="left_wheel"/>
+    <parent link="base_link"/>
 
     <axis xyz="0 1 0"/>
 
@@ -169,15 +113,11 @@
 
   </joint>
 
-
-  <link name="${robot_name}/left_wheel">
+  <link name="left_wheel">
 
     <inertial>
-
       <mass value="5.0"/>
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <inertia
         ixx="0.014"
         ixy="0"
@@ -185,33 +125,20 @@
         iyy="0.014"
         iyz="0"
         izz="0.025"/>
-
     </inertial>
 
-
     <collision>
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <geometry>
-
         <cylinder radius=".1" length=".05"/>
-
       </geometry>
-
     </collision>
 
-
     <visual name="left_wheel_visual">
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <geometry>
-
         <mesh filename="package://virtual_lab/meshes/wheel.dae"/>
-
       </geometry>
-
     </visual>
 
   </link>
@@ -221,15 +148,12 @@
   <!-- RIGHT WHEEL -->
   <!-- ========================================================= -->
 
-  <joint
-    type="continuous"
-    name="${robot_name}/right_wheel_joint">
+  <joint type="continuous" name="right_wheel_joint">
 
     <origin xyz="0 -0.15 0" rpy="0 0 0"/>
 
-    <child link="${robot_name}/right_wheel"/>
-
-    <parent link="${robot_name}/base_link"/>
+    <child link="right_wheel"/>
+    <parent link="base_link"/>
 
     <axis xyz="0 1 0"/>
 
@@ -239,15 +163,11 @@
 
   </joint>
 
-
-  <link name="${robot_name}/right_wheel">
+  <link name="right_wheel">
 
     <inertial>
-
       <mass value="5.0"/>
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <inertia
         ixx="0.014"
         ixy="0"
@@ -255,33 +175,20 @@
         iyy="0.014"
         iyz="0"
         izz="0.025"/>
-
     </inertial>
 
-
     <collision>
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <geometry>
-
         <cylinder radius=".1" length=".05"/>
-
       </geometry>
-
     </collision>
 
-
     <visual name="right_wheel_visual">
-
       <origin xyz="0 0 0" rpy="0 1.5707 1.5707"/>
-
       <geometry>
-
         <mesh filename="package://virtual_lab/meshes/wheel.dae"/>
-
       </geometry>
-
     </visual>
 
   </link>
@@ -291,39 +198,27 @@
   <!-- WHEEL FRICTION -->
   <!-- ========================================================= -->
 
-  <gazebo reference="${robot_name}/left_wheel">
-
+  <gazebo reference="left_wheel">
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
-
     <kp>1000000.0</kp>
     <kd>100.0</kd>
-
     <minDepth>0.0001</minDepth>
     <maxVel>1.0</maxVel>
-
   </gazebo>
 
-
-  <gazebo reference="${robot_name}/right_wheel">
-
+  <gazebo reference="right_wheel">
     <mu1>0.2</mu1>
     <mu2>0.2</mu2>
-
     <kp>1000000.0</kp>
     <kd>100.0</kd>
-
     <minDepth>0.0001</minDepth>
     <maxVel>1.0</maxVel>
-
   </gazebo>
 
-
-  <gazebo reference="${robot_name}/base_link">
-
+  <gazebo reference="base_link">
     <mu1>0.000002</mu1>
     <mu2>0.000002</mu2>
-
   </gazebo>
 
 
@@ -331,49 +226,38 @@
   <!-- IMU -->
   <!-- ========================================================= -->
 
-  <joint
-    name="${robot_name}/imu_joint"
-    type="fixed">
+  <joint name="imu_joint" type="fixed">
 
     <origin xyz="0 0 0" rpy="0 0 0"/>
 
-    <parent link="${robot_name}/base_link"/>
-
-    <child link="${robot_name}/imu_link"/>
+    <parent link="base_link"/>
+    <child link="imu_link"/>
 
   </joint>
 
-
-  <link name="${robot_name}/imu_link"/>
+  <link name="imu_link"/>
 
 
   <!-- ========================================================= -->
   <!-- LIDAR -->
   <!-- ========================================================= -->
 
-  <joint
-    type="fixed"
-    name="${robot_name}/scan_joint">
+  <joint type="fixed" name="scan_joint">
 
     <origin xyz="0 0 0.15" rpy="0 0 0"/>
 
-    <child link="${robot_name}/lidar_link"/>
-
-    <parent link="${robot_name}/base_link"/>
+    <child link="lidar_link"/>
+    <parent link="base_link"/>
 
     <axis xyz="0 1 0"/>
 
   </joint>
 
-
-  <link name="${robot_name}/lidar_link">
+  <link name="lidar_link">
 
     <inertial>
-
       <mass value="1e-5"/>
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <inertia
         ixx="1e-6"
         ixy="0"
@@ -381,49 +265,28 @@
         iyy="1e-6"
         iyz="0"
         izz="1e-6"/>
-
     </inertial>
 
-
     <collision name="collision">
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <geometry>
-
         <box size=".1 .1 .1"/>
-
       </geometry>
-
     </collision>
 
-
     <visual name="scan_link_visual">
-
       <origin xyz="0 0 0" rpy="0 0 0"/>
-
       <geometry>
-
         <mesh filename="package://virtual_lab/meshes/lidar.dae"/>
-
       </geometry>
-
     </visual>
 
   </link>
 
-
-  <!-- ========================================================= -->
-  <!-- LIDAR GAZEBO SETTINGS -->
-  <!-- ========================================================= -->
-
-  <gazebo reference="${robot_name}/lidar_link">
-
+  <gazebo reference="lidar_link">
     <selfCollide>false</selfCollide>
-
     <mu1 value="0.05"/>
     <mu2 value="0.05"/>
-
   </gazebo>
 
 </robot>

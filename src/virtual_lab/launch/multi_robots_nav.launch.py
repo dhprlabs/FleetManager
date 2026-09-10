@@ -1,287 +1,176 @@
-import os
-
 from launch import LaunchDescription
-from launch.actions import (
-    DeclareLaunchArgument,
-    IncludeLaunchDescription,
-    GroupAction
-)
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
-from launch_ros.actions import PushRosNamespace
+from launch_ros.actions import Node, PushRosNamespace
 from ament_index_python.packages import get_package_share_directory
+
+import os
 
 
 def generate_launch_description():
 
-    # =========================================================
-    # Package
-    # =========================================================
+    pkg_share = get_package_share_directory('virtual_lab')
 
-    pkg_virtual_lab = get_package_share_directory('virtual_lab')
-
-    nav2_bringup_dir = get_package_share_directory('nav2_bringup')
-
-    # =========================================================
-    # Files
-    # =========================================================
-
-    localization_launch = os.path.join(
-        nav2_bringup_dir,
-        'launch',
-        'localization_launch.py'
-    )
-
-    navigation_launch = os.path.join(
-        nav2_bringup_dir,
-        'launch',
-        'navigation_launch.py'
+    nav2_launch_dir = os.path.join(
+        get_package_share_directory('nav2_bringup'),
+        'launch'
     )
 
     map_file = os.path.join(
-        pkg_virtual_lab,
+        pkg_share,
         'maps',
-        'room_with_cones.yaml'
+        'logistics_warehouse.yaml'
     )
 
-    localization_params = os.path.join(
-        pkg_virtual_lab,
-        'config',
-        'amcl_localization.yaml'
-    )
-
-    navigation_params = os.path.join(
-        pkg_virtual_lab,
+    params_file = os.path.join(
+        pkg_share,
         'config',
         'navigation.yaml'
     )
 
     rviz_config = os.path.join(
-        pkg_virtual_lab,
+        pkg_share,
         'rviz',
         'multi_robot_navigation.rviz'
     )
 
-    # =========================================================
-    # Launch arguments
-    # =========================================================
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    autostart = LaunchConfiguration('autostart')
+    map_yaml = LaunchConfiguration('map')
 
-    use_sim_time = DeclareLaunchArgument(
+    declare_use_sim_time = DeclareLaunchArgument(
         'use_sim_time',
-        default_value='True',
-        description='Use Gazebo simulation clock'
+        default_value='true'
     )
 
-    autostart = DeclareLaunchArgument(
+    declare_autostart = DeclareLaunchArgument(
         'autostart',
-        default_value='True',
-        description='Automatically start Nav2'
+        default_value='true'
     )
 
-    use_rviz = DeclareLaunchArgument(
-        'rviz',
-        default_value='True',
-        description='Launch RViz'
+    declare_map = DeclareLaunchArgument(
+        'map',
+        default_value=map_file
     )
 
-    # =========================================================
-    # Robot 1
-    # =========================================================
+    # ---------------------------------------------------------
+    # ROBOT 1
+    # ---------------------------------------------------------
 
-    robot1_localization = GroupAction(
-        actions=[
+    robot1_nav = GroupAction([
+        PushRosNamespace('robot1'),
 
-            PushRosNamespace('robot1'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    localization_launch
-                ),
-                launch_arguments={
-                    'map': map_file,
-                    'params_file': localization_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'localization_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'map': map_yaml,
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
 
-    robot1_navigation = GroupAction(
-        actions=[
-
-            PushRosNamespace('robot1'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    navigation_launch
-                ),
-                launch_arguments={
-                    'params_file': navigation_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'navigation_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
+    ])
 
-    # =========================================================
-    # Robot 2
-    # =========================================================
+    # ---------------------------------------------------------
+    # ROBOT 2
+    # ---------------------------------------------------------
 
-    robot2_localization = GroupAction(
-        actions=[
+    robot2_nav = GroupAction([
+        PushRosNamespace('robot2'),
 
-            PushRosNamespace('robot2'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    localization_launch
-                ),
-                launch_arguments={
-                    'map': map_file,
-                    'params_file': localization_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'localization_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'map': map_yaml,
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
 
-    robot2_navigation = GroupAction(
-        actions=[
-
-            PushRosNamespace('robot2'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    navigation_launch
-                ),
-                launch_arguments={
-                    'params_file': navigation_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'navigation_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
+    ])
 
-    # =========================================================
-    # Robot 3
-    # =========================================================
+    # ---------------------------------------------------------
+    # ROBOT 3
+    # ---------------------------------------------------------
 
-    robot3_localization = GroupAction(
-        actions=[
+    robot3_nav = GroupAction([
+        PushRosNamespace('robot3'),
 
-            PushRosNamespace('robot3'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    localization_launch
-                ),
-                launch_arguments={
-                    'map': map_file,
-                    'params_file': localization_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'localization_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'map': map_yaml,
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
 
-    robot3_navigation = GroupAction(
-        actions=[
-
-            PushRosNamespace('robot3'),
-
-            IncludeLaunchDescription(
-                PythonLaunchDescriptionSource(
-                    navigation_launch
-                ),
-                launch_arguments={
-                    'params_file': navigation_params,
-                    'use_sim_time': LaunchConfiguration(
-                        'use_sim_time'
-                    ),
-                    'autostart': LaunchConfiguration(
-                        'autostart'
-                    ),
-                    'use_composition': 'False',
-                }.items()
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                os.path.join(nav2_launch_dir, 'navigation_launch.py')
             ),
-        ]
-    )
+            launch_arguments={
+                'use_sim_time': use_sim_time,
+                'autostart': autostart,
+                'params_file': params_file,
+            }.items()
+        ),
+    ])
 
-    # =========================================================
-    # ONE RViz for all robots
-    # =========================================================
+    # ---------------------------------------------------------
+    # ONE RVIZ
+    # ---------------------------------------------------------
 
     rviz = Node(
         package='rviz2',
         executable='rviz2',
-        name='rviz2_multi_robot',
-        arguments=[
-            '-d',
-            rviz_config
-        ],
+        name='rviz2',
+        arguments=['-d', rviz_config],
         parameters=[
-            {
-                'use_sim_time': LaunchConfiguration(
-                    'use_sim_time'
-                )
-            }
+            {'use_sim_time': use_sim_time}
         ],
-        condition=IfCondition(
-            LaunchConfiguration('rviz')
-        ),
         output='screen'
     )
 
-    # =========================================================
-    # Launch everything
-    # =========================================================
-
     return LaunchDescription([
+        declare_use_sim_time,
+        declare_autostart,
+        declare_map,
 
-        use_sim_time,
-        autostart,
-        use_rviz,
-
-        robot1_localization,
-        robot1_navigation,
-
-        robot2_localization,
-        robot2_navigation,
-
-        robot3_localization,
-        robot3_navigation,
+        robot1_nav,
+        robot2_nav,
+        robot3_nav,
 
         rviz,
     ])

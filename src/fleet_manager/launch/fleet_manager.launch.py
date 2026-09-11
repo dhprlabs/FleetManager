@@ -7,12 +7,12 @@ from launch_ros.actions import Node, PushRosNamespace
 
 # Default initial positions matching Gazebo multi-robot warehouse spawn
 DEFAULT_SPAWN_POSES = {
-    'robot1': (-10.7947, 0.5379),
-    'robot2': (-9.3141, -3.3217),
-    'robot3': (3.9202, -1.6023),
-    'robot_1': (-10.7947, 0.5379),
-    'robot_2': (-9.3141, -3.3217),
-    'robot_3': (3.9202, -1.6023),
+    'robot1': (7.7, 14.4),
+    'robot2': (3.4, 14.6),
+    'robot3': (4.3, 1.2),
+    'robot_1': (7.7, 14.4),
+    'robot_2': (3.4, 14.6),
+    'robot_3': (4.3, 1.2),
 }
 
 
@@ -53,6 +53,8 @@ def launch_setup(context, *args, **kwargs):
 
     # 2. Launch Identical Robot Stack
     for robot_name in robot_list:
+        spawn_pos = DEFAULT_SPAWN_POSES.get(robot_name, (0.0, 0.0))
+        init_x, init_y = spawn_pos[0], spawn_pos[1]
 
         robot_nodes = [
             Node(
@@ -65,6 +67,11 @@ def launch_setup(context, *args, **kwargs):
                     'robot_id': robot_name,
                     'beacon_rate': 1.0,
                     'update_rate': 2.0,
+                    'dock_x': dock_x,
+                    'dock_y': dock_y,
+                    'communication_radius': comm_radius,
+                    'initial_x': init_x,
+                    'initial_y': init_y,
                 }]
             ),
             Node(
@@ -72,7 +79,15 @@ def launch_setup(context, *args, **kwargs):
                 executable='task_manager',
                 name='task_manager',
                 output='screen',
-                parameters=[{'use_sim_time': use_sim_time, 'robot_id': robot_name}]
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'robot_id': robot_name,
+                    'dock_x': dock_x,
+                    'dock_y': dock_y,
+                    'communication_radius': comm_radius,
+                    'initial_x': init_x,
+                    'initial_y': init_y,
+                }]
             ),
             Node(
                 package='fleet_manager',
@@ -86,7 +101,15 @@ def launch_setup(context, *args, **kwargs):
                 executable='bundle_manager',
                 name='bundle_manager',
                 output='screen',
-                parameters=[{'use_sim_time': use_sim_time, 'robot_id': robot_name}]
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'robot_id': robot_name,
+                    'dock_x': dock_x,
+                    'dock_y': dock_y,
+                    'communication_radius': comm_radius,
+                    'initial_x': init_x,
+                    'initial_y': init_y,
+                }]
             ),
             Node(
                 package='fleet_manager',
@@ -121,7 +144,15 @@ def launch_setup(context, *args, **kwargs):
                 executable='nav2_bridge',
                 name='nav2_bridge',
                 output='screen',
-                parameters=[{'use_sim_time': use_sim_time, 'robot_id': robot_name}]
+                parameters=[{
+                    'use_sim_time': use_sim_time,
+                    'robot_id': robot_name,
+                    'dock_x': dock_x,
+                    'dock_y': dock_y,
+                    'communication_radius': comm_radius,
+                    'initial_x': init_x,
+                    'initial_y': init_y,
+                }]
             ),
             Node(
                 package='fleet_manager',
@@ -135,6 +166,8 @@ def launch_setup(context, *args, **kwargs):
                     'packet_dropout_rate': dropout_rate,
                     'beacon_rate': 2.0,
                     'peer_timeout': 3.0,
+                    'initial_x': init_x,
+                    'initial_y': init_y,
                 }]
             ),
         ]
@@ -201,12 +234,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'dock_x',
-            default_value='-9.9734',
+            default_value='5.0',
             description='X coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(
             'dock_y',
-            default_value='-1.4383',
+            default_value='12.0',
             description='Y coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(

@@ -31,6 +31,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from fleet_interfaces.msg import (
     Bundle,
     RobotState,
@@ -149,8 +150,19 @@ class BundleManager(Node):
 
         self.declare_parameter('nominal_speed', 0.5)
         self.declare_parameter('service_time', 2.0)
+        self.declare_parameter('dock_x', 5.0)
+        self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('communication_radius', 6.0)
+        self.declare_parameter('initial_x', 0.0)
+        self.declare_parameter('initial_y', 0.0)
+
         self.nominal_speed = self.get_parameter('nominal_speed').get_parameter_value().double_value
         self.service_time = self.get_parameter('service_time').get_parameter_value().double_value
+        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
+        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        init_x = self.get_parameter('initial_x').get_parameter_value().double_value
+        init_y = self.get_parameter('initial_y').get_parameter_value().double_value
 
         # Queue State
         self.owned_tasks: Set[str] = set()
@@ -160,8 +172,8 @@ class BundleManager(Node):
         self.task_details: Dict[str, Dict] = {}
 
         # Live Robot Pose
-        self.current_x: float = 0.0
-        self.current_y: float = 0.0
+        self.current_x: float = init_x
+        self.current_y: float = init_y
         self.total_estimated_cost: float = 0.0
 
         # Subscriptions
@@ -176,6 +188,9 @@ class BundleManager(Node):
         )
         self.robot_state_sub = self.create_subscription(
             RobotState, 'robot_state', self._handle_robot_state, 10
+        )
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, 'amcl_pose', self._handle_amcl_pose, 10
         )
         self.task_events_sub = self.create_subscription(
             Task, '/fleet/task_events', self._handle_task_event, 10
@@ -210,7 +225,14 @@ class BundleManager(Node):
         self.current_x = msg.current_pose.pose.position.x
         self.current_y = msg.current_pose.pose.position.y
 
+    def _handle_amcl_pose(self, msg: PoseWithCovarianceStamped):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+
     def _handle_task_pool(self, msg: TaskPool):
+        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
+        if dist_to_dock > self.comm_radius:
+            return
         for t in msg.tasks:
             self._store_task_detail(t)
 

@@ -93,7 +93,7 @@ function RobotStatusPanel({ robots }) {
     );
 }
 
-function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = [], onPointSelect }) {
+function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = [], onPointSelect, dockInfo }) {
     const svgRef = useRef(null);
     const instructionRef = useRef(null);
     const [viewBox, setViewBox] = useState(baseViewBox);
@@ -362,6 +362,74 @@ function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = 
                     </g>
                 ))}
 
+                {/* Task Broadcaster Station & RF Coverage (Light & Compact) */}
+                {dockInfo && (
+                    <g id="task-broadcaster-layer">
+                        {/* Subtle, Lightweight RF Coverage Zone */}
+                        <circle
+                            cx={dockInfo.x}
+                            cy={dockInfo.y}
+                            r={dockInfo.radiusPx}
+                            fill="#f59e0b"
+                            fillOpacity="0.035"
+                            stroke="#f59e0b"
+                            strokeDasharray="4 4"
+                            strokeWidth="1"
+                            strokeOpacity="0.45"
+                        />
+
+                        {/* Compact Dock Station Base Pad (12x12 px, matching robot scale) */}
+                        <rect
+                            x={dockInfo.x - 6}
+                            y={dockInfo.y - 6}
+                            width="12"
+                            height="12"
+                            rx="3"
+                            fill="#ffffff"
+                            stroke="#f59e0b"
+                            strokeWidth="1.5"
+                            style={{ filter: "drop-shadow(0px 1px 3px rgba(0,0,0,0.15))" }}
+                        />
+                        {/* Broadcaster antenna core dot */}
+                        <circle
+                            cx={dockInfo.x}
+                            cy={dockInfo.y}
+                            r="2.5"
+                            fill="#f59e0b"
+                        />
+                        <circle
+                            cx={dockInfo.x}
+                            cy={dockInfo.y}
+                            r="0.8"
+                            fill="#ffffff"
+                        />
+
+                        {/* Clean, lightweight side labels matching robot label styling */}
+                        <text
+                            x={dockInfo.x + 9}
+                            y={dockInfo.y - 2}
+                            fill="#92400e"
+                            fontFamily="IBM Plex Sans, sans-serif"
+                            fontSize="8"
+                            fontWeight="700"
+                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
+                        >
+                            Broadcaster
+                        </text>
+                        <text
+                            x={dockInfo.x + 9}
+                            y={dockInfo.y + 7}
+                            fill="#78350f"
+                            fontFamily="IBM Plex Sans, sans-serif"
+                            fontSize="7"
+                            fontWeight="500"
+                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
+                        >
+                            6m RF range
+                        </text>
+                    </g>
+                )}
+
                 {/* Fleet Robots */}
                 <g>
                     {robots.map((robot) => (
@@ -443,6 +511,20 @@ function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = 
                     ))}
                 </g>
             </svg>
+
+            {/* Broadcaster RF Status Tag */}
+            {dockInfo && (
+                <div className="absolute left-4 top-4 z-[6] flex items-center gap-2 rounded-[8px] border border-[#f59e0b]/40 bg-white/95 px-3 py-1.5 text-[11.5px] font-semibold text-[#92400e] shadow-sm backdrop-blur-sm">
+                    <span className="relative flex h-2.5 w-2.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#f59e0b] opacity-75"></span>
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#d97706]"></span>
+                    </span>
+                    <span>Broadcaster: ({dockInfo.rosX?.toFixed(1)}, {dockInfo.rosY?.toFixed(1)})</span>
+                    <span className="rounded bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold text-[#b45309] border border-[#fcd34d]">
+                        {dockInfo.radiusMeters}m RF Range
+                    </span>
+                </div>
+            )}
 
             {selectionMode && (
                 <div ref={instructionRef} className={`pointer-events-none absolute left-1/2 top-4 z-[6] -translate-x-1/2 rounded-[9px] border border-[#b9d8c9] bg-white px-3.5 py-2 text-center text-xs font-semibold text-[#2f6f5e] shadow-[0_2px_8px_rgb(27_35_31_/_8%)] transition-opacity duration-150 ${instructionHovered ? "bg-white/75 opacity-80" : "opacity-100"}`}>
@@ -906,7 +988,7 @@ function AddTaskModal({ robots = [], onClose, onConfirm }) {
 
 function App() {
     // ── Live ROS data ──────────────────────────────────────────────────────
-    const { rosStatus, liveRobots, liveTasks, broadcastTasks } = useRos();
+    const { rosStatus, liveRobots, liveTasks, dockInfo, broadcastTasks } = useRos();
 
     // Use live data when available, fall back to mock data
     const robots = liveRobots ?? mockRobots;
@@ -1100,6 +1182,7 @@ function App() {
                         tasks={tasks}
                         stagedTasks={stagedTasks}
                         onPointSelect={handlePointSelect}
+                        dockInfo={dockInfo}
                     />
                     <TaskStatusPanel
                         tasks={tasks}

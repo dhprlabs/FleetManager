@@ -16,6 +16,7 @@ Responsibilities:
 """
 
 import json
+import math
 import time
 
 import rclpy
@@ -35,7 +36,7 @@ from fleet_interfaces.msg import (
     P2PMessage,
     P2PEvent,
 )
-from fleet_manager.fleet_state import FleetState, RobotEntry, TaskEntry
+from fleet_manager.fleet_state import FleetState, RobotEntry, TaskEntry, get_state_rank
 from fleet_manager.p2p_client import P2PClient
 
 
@@ -49,9 +50,19 @@ class StateManager(Node):
 
         self.declare_parameter('update_rate', 2.0)
         self.declare_parameter('beacon_rate', 1.0)
+        self.declare_parameter('dock_x', 5.0)
+        self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('communication_radius', 6.0)
+        self.declare_parameter('initial_x', 0.0)
+        self.declare_parameter('initial_y', 0.0)
 
         self.rate = self.get_parameter('update_rate').get_parameter_value().double_value
         self.beacon_rate = self.get_parameter('beacon_rate').get_parameter_value().double_value
+        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
+        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        init_x = self.get_parameter('initial_x').get_parameter_value().double_value
+        init_y = self.get_parameter('initial_y').get_parameter_value().double_value
 
         # Guard flag — suppress all publishing until AMCL delivers first pose
         self._amcl_initialized = False
@@ -59,10 +70,10 @@ class StateManager(Node):
         # ── Fleet State Store ──────────────────────────────────────────────
         self.fs = FleetState(robot_id=self.robot_id)
 
-        # Initialise own entry with placeholder pose; overwritten on first amcl_pose
+        # Initialise own entry with initial spawn pose; updated on amcl_pose/TF
         own = RobotEntry(
             robot_id=self.robot_id,
-            x=0.0, y=0.0,
+            x=init_x, y=init_y,
             battery=100.0,
             status=RobotState.STATUS_IDLE,
         )
@@ -100,6 +111,7 @@ class StateManager(Node):
         self.p2p = P2PClient(node=self)
         self.p2p.register_handler('STATE_BEACON', self._on_state_beacon)
         self.p2p.register_handler('TASK_STATUS', self._on_task_status)
+        self.p2p.register_handler('TASK_POOL', self._on_p2p_task_pool)
         self.p2p.register_handler('STATE_SYNC_REQUEST', self._on_sync_request)
         self.p2p.register_handler('STATE_SYNC_RESPONSE', self._on_sync_response)
 
@@ -172,10 +184,24 @@ class StateManager(Node):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _task_pool_cb(self, msg: TaskPool):
+        own = self.fs.get_own_state()
+        cur_x = own.x if own else 0.0
+        cur_y = own.y if own else 0.0
+        dist_to_dock = math.hypot(cur_x - self.dock_x, cur_y - self.dock_y)
+        if dist_to_dock > self.comm_radius:
+            return
         for task in msg.tasks:
             self._ingest_task_ros(task)
 
     def _task_event_cb(self, task: Task):
+        # Broadcaster-originated events without assignment require proximity to dock
+        if not task.assigned_robot_id:
+            own = self.fs.get_own_state()
+            cur_x = own.x if own else 0.0
+            cur_y = own.y if own else 0.0
+            dist_to_dock = math.hypot(cur_x - self.dock_x, cur_y - self.dock_y)
+            if dist_to_dock > self.comm_radius:
+                return
         self._ingest_task_ros(task)
 
     def _ingest_task_ros(self, task: Task):
@@ -192,12 +218,43 @@ class StateManager(Node):
             wall_time=time.time(),
             source_robot_id='task_broadcaster',
         )
-        # Only merge if newer (broadcaster has no Lamport info)
         existing = self.fs.get_task(task.task_id)
-        if existing is None:
+        if existing is None or get_state_rank(task.state) > get_state_rank(existing.state):
             self.fs.tick()
             entry.lamport_clock = self.fs.clock
             self.fs.merge_task(entry)
+
+    def _on_p2p_task_pool(self, msg: P2PMessage):
+        """Receives task pool broadcast routed over physical wireless channel."""
+        try:
+            payload = json.loads(msg.payload)
+            tasks = payload.get('tasks', [])
+        except Exception as e:
+            self.get_logger().warn(f'[{self.robot_id}] Failed to parse P2P TASK_POOL: {e}')
+            return
+
+        for t_dict in tasks:
+            entry = TaskEntry(
+                task_id=t_dict['task_id'],
+                state=t_dict.get('state', Task.STATE_AVAILABLE),
+                assigned_robot_id=t_dict.get('assigned_robot_id', ''),
+                version=t_dict.get('version', 1),
+                priority=t_dict.get('priority', 1),
+                pickup_x=float(t_dict['pickup_x']),
+                pickup_y=float(t_dict['pickup_y']),
+                dropoff_x=float(t_dict['dropoff_x']),
+                dropoff_y=float(t_dict['dropoff_y']),
+                wall_time=time.time(),
+                source_robot_id='dock_station',
+            )
+            existing = self.fs.get_task(entry.task_id)
+            if existing is None or get_state_rank(entry.state) > get_state_rank(existing.state):
+                self.fs.tick()
+                entry.lamport_clock = self.fs.clock
+                self.fs.merge_task(entry)
+                self.get_logger().info(
+                    f'[{self.robot_id}] Ingested task {entry.task_id} via Dock Station P2P broadcast'
+                )
 
     # ──────────────────────────────────────────────────────────────────────────
     # P2P Handlers — Receive
@@ -222,6 +279,18 @@ class StateManager(Node):
             entry = self.fs.task_entry_from_dict(d)
         except Exception:
             return
+        existing = self.fs.get_task(entry.task_id)
+        if existing:
+            if entry.pickup_x == 0.0 and entry.pickup_y == 0.0:
+                entry.pickup_x = existing.pickup_x
+                entry.pickup_y = existing.pickup_y
+            if entry.dropoff_x == 0.0 and entry.dropoff_y == 0.0:
+                entry.dropoff_x = existing.dropoff_x
+                entry.dropoff_y = existing.dropoff_y
+            if not entry.source_robot_id:
+                entry.source_robot_id = msg.source_robot_id or existing.source_robot_id
+            if entry.lamport_clock == 0:
+                entry.lamport_clock = max(existing.lamport_clock + 1, self.fs.clock)
         changed = self.fs.merge_task(entry)
         if changed:
             self.get_logger().debug(

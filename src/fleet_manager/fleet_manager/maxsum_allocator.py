@@ -115,10 +115,10 @@ class MaxSumAllocator(Node):
             f'[{self.robot_id}] Reachable peers: {self.reachable_peers}'
         )
 
-    def _handle_p2p_maxsum(self, sender_id: str, message_type: str, payload: dict):
+    def _handle_p2p_maxsum(self, msg):
         """Processes incoming Max-Sum messages delivered over P2P RF channel."""
         self.get_logger().debug(
-            f'[{self.robot_id}] Inbound Max-Sum packet from {sender_id}: {payload.get("type", "UNKNOWN")}'
+            f'[{self.robot_id}] Inbound Max-Sum packet from {msg.source_robot_id}: {msg.message_type}'
         )
 
     def _log_solver(self, text: str):
@@ -137,9 +137,13 @@ class MaxSumAllocator(Node):
         if not self.latest_world_view:
             return
 
+        # Guard: world view not yet populated (own state missing robot_id)
+        own = self.latest_world_view.own_state
+        if not own.robot_id:
+            return
+
         # 1. Collect robots: self + peers that are currently IN comms range
         robots_info = []
-        own = self.latest_world_view.own_state
         robots_info.append(RobotInfo(
             robot_id=own.robot_id,
             x=own.current_pose.pose.position.x,
@@ -149,7 +153,6 @@ class MaxSumAllocator(Node):
         ))
 
         for peer in self.latest_world_view.peer_states:
-            # ── Phase 8 Gate ──────────────────────────────────────────────
             # Only include peers that are currently in comms range.
             # If reachable_peers is empty (P2P not yet initialised or truly
             # isolated), fall back to including all known peers so the robot
@@ -167,20 +170,24 @@ class MaxSumAllocator(Node):
                 current_workload=0,
             ))
 
-        # 2. Collect available (unassigned) tasks — exclude already-owned
+        # 2. Collect only AVAILABLE (unallocated) tasks — skip anything already claimed.
+        # Tasks become ALLOCATED the moment a robot wins ownership and broadcasts
+        # TASK_STATUS, so peers won't double-bid in the next cycle.
         available_tasks = []
         for t in self.latest_world_view.task_states:
-            if t.state == Task.STATE_AVAILABLE:
-                if t.task_id in self.my_owned_tasks:
-                    continue  # This robot already owns it; no need to re-bid
-                available_tasks.append(TaskInfo(
-                    task_id=t.task_id,
-                    pickup_x=t.pickup_pose.pose.position.x,
-                    pickup_y=t.pickup_pose.pose.position.y,
-                    delivery_x=t.dropoff_pose.pose.position.x,
-                    delivery_y=t.dropoff_pose.pose.position.y,
-                    priority=t.priority,
-                ))
+            if t.state != Task.STATE_AVAILABLE:
+                continue  # Already allocated / in-progress / completed
+            if t.task_id in self.my_owned_tasks:
+                continue  # This robot already owns it; no need to re-bid
+            available_tasks.append(TaskInfo(
+                task_id=t.task_id,
+                pickup_x=t.pickup_pose.pose.position.x,
+                pickup_y=t.pickup_pose.pose.position.y,
+                delivery_x=t.dropoff_pose.pose.position.x,
+                delivery_y=t.dropoff_pose.pose.position.y,
+                priority=t.priority,
+            ))
+
 
         if not available_tasks:
             return
@@ -203,12 +210,15 @@ class MaxSumAllocator(Node):
         self.last_allocation_ownership = ownership
 
         # 4. Check if any new tasks were assigned to THIS robot
+        # Build a quick lookup of task info from available_tasks for the broadcast
+        task_info_map = {t.task_id: t for t in available_tasks}
+
         for task_id, owner_robot in ownership.items():
             if owner_robot == self.robot_id and task_id not in self.my_owned_tasks:
                 self.my_owned_tasks.append(task_id)
-                self.get_logger().info(f'[{self.robot_id}] ★ WON TASK OWNERSHIP: {task_id} ──► {self.robot_id}')
+                self.get_logger().info(f'[{self.robot_id}] ★ WON TASK OWNERSHIP: {task_id} ►► {self.robot_id}')
 
-                # Publish ownership
+                # Publish ownership (local + fleet)
                 msg = TaskOwnership()
                 msg.task_id = task_id
                 msg.robot_id = self.robot_id
@@ -217,11 +227,30 @@ class MaxSumAllocator(Node):
                 self.ownership_pub.publish(msg)
                 self.fleet_ownership_pub.publish(msg)
 
-                # Broadcast ownership over P2P
+                # Immediately broadcast ALLOCATED state over P2P so peers'
+                # world views are updated before their next allocation cycle,
+                # preventing them from double-bidding on this task.
                 self.p2p.broadcast('TASK_OWNERSHIP', payload={
                     'task_id': task_id,
                     'robot_id': self.robot_id,
                     'timestamp': self.get_clock().now().nanoseconds
+                })
+                # Also broadcast TASK_STATUS with ALLOCATED so peers' FleetState
+                # marks this task as non-available in their next cycle.
+                t_info = task_info_map.get(task_id)
+                self.p2p.broadcast('TASK_STATUS', payload={
+                    'task_id': task_id,
+                    'state': Task.STATE_ALLOCATED,
+                    'assigned_robot_id': self.robot_id,
+                    'version': 1,
+                    'priority': t_info.priority if t_info else 1,
+                    'pickup_x': t_info.pickup_x if t_info else 0.0,
+                    'pickup_y': t_info.pickup_y if t_info else 0.0,
+                    'dropoff_x': t_info.delivery_x if t_info else 0.0,
+                    'dropoff_y': t_info.delivery_y if t_info else 0.0,
+                    'lamport_clock': 0,
+                    'wall_time': 0.0,
+                    'source_robot_id': self.robot_id,
                 })
 
 

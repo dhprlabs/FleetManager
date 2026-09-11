@@ -67,6 +67,27 @@ class TaskEntry:
     source_robot_id: str = ''
 
 
+# Lifecycle progress rank for monotonic state guard.
+# In Task.msg: AVAILABLE=0, ASSIGNED=1, IN_PROGRESS=2, PICKUP_COMPLETED=6, DELIVERING=7, COMPLETED=3, FAILED=4, CANCELLED=5.
+# Raw integer comparison fails because COMPLETED (3) < DELIVERING (7).
+# Ranking maps each state to its monotonic lifecycle stage; terminal states have highest rank (5).
+TASK_STATE_RANK = {
+    0: 0,  # STATE_AVAILABLE
+    1: 1,  # STATE_ASSIGNED / STATE_ALLOCATED
+    2: 2,  # STATE_IN_PROGRESS
+    6: 3,  # STATE_PICKUP_COMPLETED
+    7: 4,  # STATE_DELIVERING
+    3: 5,  # STATE_COMPLETED (Terminal)
+    4: 5,  # STATE_FAILED (Terminal)
+    5: 5,  # STATE_CANCELLED (Terminal)
+}
+
+
+def get_state_rank(state: int) -> int:
+    """Returns monotonic lifecycle rank of a task state."""
+    return TASK_STATE_RANK.get(int(state), int(state))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Fleet State Store
 # ─────────────────────────────────────────────────────────────────────────────
@@ -83,28 +104,22 @@ class FleetState:
 
     def __init__(self, robot_id: str):
         self.robot_id = robot_id
-        self._lamport: int = 0
-
-        # Known robot states: robot_id -> RobotEntry
+        self._lamport = 0
         self._robots: Dict[str, RobotEntry] = {}
-
-        # Known task states: task_id -> TaskEntry
         self._tasks: Dict[str, TaskEntry] = {}
-
-    # ── Lamport Clock ────────────────────────────────────────────────────────
-
-    def tick(self) -> int:
-        """Increment the Lamport clock for a local event. Returns new value."""
-        self._lamport += 1
-        return self._lamport
-
-    def advance(self, received: int) -> int:
-        """Advance clock upon receiving a message: L = max(L, received) + 1."""
-        self._lamport = max(self._lamport, received) + 1
-        return self._lamport
 
     @property
     def clock(self) -> int:
+        return self._lamport
+
+    def tick(self) -> int:
+        """Increment own Lamport clock (called on local event)."""
+        self._lamport += 1
+        return self._lamport
+
+    def advance(self, received_clock: int) -> int:
+        """Advance own Lamport clock on message receipt: L = max(L, L_msg) + 1."""
+        self._lamport = max(self._lamport, received_clock) + 1
         return self._lamport
 
     # ── LWW Merge Helpers ────────────────────────────────────────────────────
@@ -154,8 +169,8 @@ class FleetState:
         Merge a received task state entry (LWW + monotonic state guard).
 
         Monotonicity rule: task lifecycle state is irreversible.
-        A task at state N (e.g. IN_PROGRESS=2) must NEVER be overwritten
-        by an incoming entry with state < N (e.g. AVAILABLE=0), regardless
+        A task at lifecycle stage N (e.g. DELIVERING rank 4) must NEVER be overwritten
+        by an incoming entry with lower rank (e.g. AVAILABLE rank 0), regardless
         of Lamport clock. This prevents late-joining robots with stale world
         views from resetting already-progressed tasks.
 
@@ -167,15 +182,18 @@ class FleetState:
             self.advance(entry.lamport_clock)
             return True
 
+        incoming_rank = get_state_rank(entry.state)
+        existing_rank = get_state_rank(existing.state)
+
         # Monotonic state guard: only allow state transitions that move
-        # forward in the lifecycle (higher state value wins unconditionally)
-        if entry.state > existing.state:
+        # forward in the lifecycle (higher rank wins unconditionally)
+        if incoming_rank > existing_rank:
             self._tasks[entry.task_id] = entry
             self.advance(entry.lamport_clock)
             return True
 
         # Same state level: fall back to standard LWW clock comparison
-        if entry.state == existing.state and self._lww_wins(
+        if incoming_rank == existing_rank and self._lww_wins(
             entry.lamport_clock, entry.source_robot_id,
             existing.lamport_clock, existing.source_robot_id
         ):
@@ -183,7 +201,7 @@ class FleetState:
             self.advance(entry.lamport_clock)
             return True
 
-        # Incoming state is lower than existing — silently discard
+        # Incoming state has lower rank than existing — silently discard
         return False
 
     def update_own_task(self, entry: TaskEntry) -> TaskEntry:

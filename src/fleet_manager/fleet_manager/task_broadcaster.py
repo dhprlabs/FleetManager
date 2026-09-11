@@ -18,6 +18,24 @@ from fleet_interfaces.msg import Task, TaskPool, P2PMessage
 from fleet_interfaces.srv import CreateTask, GenerateSampleTasks
 
 
+# Lifecycle progress rank for monotonic state tracking
+TASK_STATE_RANK = {
+    Task.STATE_AVAILABLE: 0,
+    Task.STATE_ALLOCATED: 1,
+    Task.STATE_ASSIGNED: 1,
+    Task.STATE_IN_PROGRESS: 2,
+    Task.STATE_PICKUP_COMPLETED: 3,
+    Task.STATE_DELIVERING: 4,
+    Task.STATE_COMPLETED: 5,
+    Task.STATE_FAILED: 5,
+    Task.STATE_CANCELLED: 5,
+}
+
+
+def _get_state_rank(state: int) -> int:
+    return TASK_STATE_RANK.get(state, int(state))
+
+
 class TaskBroadcaster(Node):
     def __init__(self):
         super().__init__('task_broadcaster')
@@ -26,8 +44,8 @@ class TaskBroadcaster(Node):
         self.declare_parameter('publish_rate', 1.0)
         self.declare_parameter('auto_generate_sample_tasks', False)
         self.declare_parameter('warehouse_frame', 'map')
-        self.declare_parameter('dock_x', -9.9734)
-        self.declare_parameter('dock_y', -1.4383)
+        self.declare_parameter('dock_x', 5.0)
+        self.declare_parameter('dock_y', 12.0)
         self.declare_parameter('broadcast_radius', 6.0)
 
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
@@ -52,8 +70,13 @@ class TaskBroadcaster(Node):
         self.task_event_pub = self.create_publisher(Task, '/fleet/task_events', 10)
         # Wireless medium publisher for P2P-constrained dock transmission
         self.wireless_packet_pub = self.create_publisher(P2PMessage, '/fleet/wireless_packets', 10)
+        # Dock station pose publisher for fleet visualizer and web frontend
+        self.dock_pose_pub = self.create_publisher(PoseStamped, '/fleet/dock_pose', latching_qos)
 
-        # Subscription for frontend batch broadcast
+        # Subscriptions
+        self.task_event_sub = self.create_subscription(
+            Task, '/fleet/task_events', self.handle_task_event, 10
+        )
         self.batch_task_sub = self.create_subscription(
             TaskPool, '/fleet/broadcast_tasks', self.handle_broadcast_tasks, 10
         )
@@ -151,6 +174,10 @@ class TaskBroadcaster(Node):
         pool_msg.tasks = list(self.tasks.values())
         self.task_pool_pub.publish(pool_msg)
 
+        # Publish dock station pose
+        dock_pose = self._create_pose(self.dock_x, self.dock_y)
+        self.dock_pose_pub.publish(dock_pose)
+
         # Broadcast over simulated wireless medium from dock station location
         p2p_msg = P2PMessage()
         p2p_msg.source_robot_id = 'dock_station'
@@ -231,6 +258,12 @@ class TaskBroadcaster(Node):
 
         self.get_logger().info(f'Broadcasted batch of {len(added_ids)} tasks to fleet: {added_ids}')
         self.publish_task_pool()
+
+    def handle_task_event(self, task: Task):
+        """Updates internal task state so periodic broadcasts maintain live states."""
+        existing = self.tasks.get(task.task_id)
+        if existing is None or _get_state_rank(task.state) >= _get_state_rank(existing.state):
+            self.tasks[task.task_id] = task
 
     def handle_generate_sample_tasks(self, request, response):
         count = request.count if request.count > 0 else 5

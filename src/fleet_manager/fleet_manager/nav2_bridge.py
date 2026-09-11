@@ -32,7 +32,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
 
 from fleet_interfaces.msg import (
@@ -72,10 +72,15 @@ class TaskExecutionManager(Node):
         self.declare_parameter('enable_nav2', True)
         self.declare_parameter('pickup_dwell_sec', 1.5)
         self.declare_parameter('delivery_dwell_sec', 1.0)
-        self.declare_parameter('arrival_tolerance', 0.5)
+        self.declare_parameter('arrival_tolerance', 0.8)
         self.declare_parameter('reconciliation_timeout_sec', 10.0)
         self.declare_parameter('gazebo_item_prefix', 'item_')
         self.declare_parameter('enable_pickup_validation', True)
+        self.declare_parameter('dock_x', 5.0)
+        self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('communication_radius', 6.0)
+        self.declare_parameter('initial_x', 0.0)
+        self.declare_parameter('initial_y', 0.0)
 
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
         self.enable_nav2 = self.get_parameter('enable_nav2').get_parameter_value().bool_value
@@ -85,15 +90,21 @@ class TaskExecutionManager(Node):
         self.reconciliation_timeout_sec = self.get_parameter('reconciliation_timeout_sec').get_parameter_value().double_value
         self.gazebo_item_prefix = self.get_parameter('gazebo_item_prefix').get_parameter_value().string_value
         self.enable_pickup_validation = self.get_parameter('enable_pickup_validation').get_parameter_value().bool_value
+        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
+        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        init_x = self.get_parameter('initial_x').get_parameter_value().double_value
+        init_y = self.get_parameter('initial_y').get_parameter_value().double_value
 
         # Execution State Machine
         self.execution_state = TaskExecutionState.IDLE
         self.active_task_id: Optional[str] = None
         self.active_task_info: Optional[Dict] = None
+        self._dwell_timer = None
 
         # Robot Live Pose
-        self.current_x: float = 0.0
-        self.current_y: float = 0.0
+        self.current_x: float = init_x
+        self.current_y: float = init_y
 
         # Task Cache (task_id -> {pickup_pose, dropoff_pose, priority})
         self.task_cache: Dict[str, Dict] = {}
@@ -132,6 +143,9 @@ class TaskExecutionManager(Node):
         )
         self.robot_state_sub = self.create_subscription(
             RobotState, 'robot_state', self._handle_robot_state, 10
+        )
+        self.amcl_sub = self.create_subscription(
+            PoseWithCovarianceStamped, 'amcl_pose', self._handle_amcl_pose, 10
         )
         self.world_view_sub = self.create_subscription(
             WorldView, 'world_view', self._handle_world_view, 10
@@ -182,6 +196,10 @@ class TaskExecutionManager(Node):
         self.current_x = msg.current_pose.pose.position.x
         self.current_y = msg.current_pose.pose.position.y
 
+    def _handle_amcl_pose(self, msg: PoseWithCovarianceStamped):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+
     def _handle_world_view(self, msg: WorldView):
         self.current_x = msg.own_state.current_pose.pose.position.x
         self.current_y = msg.own_state.current_pose.pose.position.y
@@ -193,6 +211,10 @@ class TaskExecutionManager(Node):
             }
 
     def _handle_task_pool(self, msg: TaskPool):
+        # Ignore global DDS broadcast if robot is out of radio range of dock station
+        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
+        if dist_to_dock > self.comm_radius:
+            return
         for t in msg.tasks:
             self.task_cache[t.task_id] = {
                 'pickup_pose': t.pickup_pose,
@@ -370,7 +392,7 @@ class TaskExecutionManager(Node):
         self._publish_task_state(Task.STATE_PICKUP_COMPLETED)
 
         # Non-blocking dwell timer for pickup cargo loading
-        self.create_timer(self.pickup_dwell_sec, self._finish_pickup_dwell)
+        self._dwell_timer = self.create_timer(self.pickup_dwell_sec, self._finish_pickup_dwell)
 
     def _enter_reconciling(self):
         """
@@ -479,6 +501,11 @@ class TaskExecutionManager(Node):
 
     def _finish_pickup_dwell(self):
         """Transitions PICKUP_COMPLETED ──► DELIVERING: Dispatches goal to DROPOFF pose."""
+        if self._dwell_timer is not None:
+            self._dwell_timer.cancel()
+            self._dwell_timer.destroy()
+            self._dwell_timer = None
+
         if self.execution_state != TaskExecutionState.PICKUP_COMPLETED:
             return
 
@@ -586,18 +613,21 @@ class TaskExecutionManager(Node):
 
     def _on_goal_result(self, future, target_pose: PoseStamped, on_reached):
         status = future.result().status
-        if status == GoalStatus.STATUS_SUCCEEDED:
-            tx = target_pose.pose.position.x
-            ty = target_pose.pose.position.y
-            dist = math.hypot(self.current_x - tx, self.current_y - ty)
+        tx = target_pose.pose.position.x
+        ty = target_pose.pose.position.y
+        dist = math.hypot(self.current_x - tx, self.current_y - ty)
+        tol = max(self.arrival_tolerance, 0.85)
+
+        # Allow arrival if status is SUCCEEDED or if physical distance is within tolerance
+        if status == GoalStatus.STATUS_SUCCEEDED or dist <= tol:
             self.get_logger().info(
-                f'[{self.robot_id}] ✓ Nav2 SUCCEEDED. '
-                f'Arrival verified (distance to waypoint: {dist:.2f}m)'
+                f'[{self.robot_id}] ✓ Arrival verified (status: {status}, '
+                f'distance to waypoint: {dist:.2f}m <= {tol:.2f}m)'
             )
             on_reached()
         else:
             self.get_logger().warn(
-                f'[{self.robot_id}] Nav2 goal ended with status: {status}'
+                f'[{self.robot_id}] Nav2 goal ended with status: {status}, distance: {dist:.2f}m (tol: {tol:.2f}m)'
             )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -621,17 +651,64 @@ class TaskExecutionManager(Node):
         self.assigned_task_pub.publish(t)
         self.task_event_pub.publish(t)
 
-        # Broadcast via P2P
+        # Broadcast via P2P with full coordinate and authority metadata
         self.p2p.broadcast('TASK_STATUS', payload={
             'task_id': self.active_task_id,
             'assigned_robot_id': self.robot_id,
             'state': state,
+            'priority': int(t.priority),
+            'pickup_x': float(t.pickup_pose.pose.position.x),
+            'pickup_y': float(t.pickup_pose.pose.position.y),
+            'dropoff_x': float(t.dropoff_pose.pose.position.x),
+            'dropoff_y': float(t.dropoff_pose.pose.position.y),
+            'source_robot_id': self.robot_id,
             'timestamp': self.get_clock().now().nanoseconds,
         })
 
     def _eval_execution_step(self):
-        """Periodic safety check — currently a no-op placeholder."""
-        pass
+        """Periodic safety check and proximity arrival watchdog."""
+        if not self.active_task_id or not self.active_task_info:
+            return
+
+        tol = max(self.arrival_tolerance, 0.8)
+
+        if self.execution_state == TaskExecutionState.DELIVERING:
+            dropoff = self.active_task_info.get('dropoff_pose')
+            if dropoff:
+                dx = dropoff.pose.position.x
+                dy = dropoff.pose.position.y
+                dist = math.hypot(self.current_x - dx, self.current_y - dy)
+                if dist <= tol:
+                    self.get_logger().info(
+                        f'[{self.robot_id}] Proximity arrival watchdog triggered at DROPOFF '
+                        f'(dist: {dist:.2f}m <= {tol:.2f}m) for task {self.active_task_id}'
+                    )
+                    if self.current_goal_handle:
+                        try:
+                            self.current_goal_handle.cancel_goal_async()
+                        except Exception:
+                            pass
+                        self.current_goal_handle = None
+                    self._on_delivery_arrival()
+
+        elif self.execution_state == TaskExecutionState.IN_PROGRESS:
+            pickup = self.active_task_info.get('pickup_pose')
+            if pickup:
+                px = pickup.pose.position.x
+                py = pickup.pose.position.y
+                dist = math.hypot(self.current_x - px, self.current_y - py)
+                if dist <= tol:
+                    self.get_logger().info(
+                        f'[{self.robot_id}] Proximity arrival watchdog triggered at PICKUP '
+                        f'(dist: {dist:.2f}m <= {tol:.2f}m) for task {self.active_task_id}'
+                    )
+                    if self.current_goal_handle:
+                        try:
+                            self.current_goal_handle.cancel_goal_async()
+                        except Exception:
+                            pass
+                        self.current_goal_handle = None
+                    self._on_pickup_arrival()
 
 
 def main(args=None):

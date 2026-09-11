@@ -62,6 +62,24 @@ def _state_color(state: int) -> ColorRGBA:
     return c
 
 
+# Monotonic lifecycle rank mapping
+TASK_STATE_RANK = {
+    Task.STATE_AVAILABLE: 0,
+    Task.STATE_ALLOCATED: 1,
+    Task.STATE_ASSIGNED: 1,
+    Task.STATE_IN_PROGRESS: 2,
+    Task.STATE_PICKUP_COMPLETED: 3,
+    Task.STATE_DELIVERING: 4,
+    Task.STATE_COMPLETED: 5,
+    Task.STATE_FAILED: 5,
+    Task.STATE_CANCELLED: 5,
+}
+
+
+def _get_state_rank(state: int) -> int:
+    return TASK_STATE_RANK.get(state, int(state))
+
+
 class FleetVisualizer(Node):
     def __init__(self):
         super().__init__('fleet_visualizer')
@@ -78,40 +96,37 @@ class FleetVisualizer(Node):
         self.text_scale       = self.get_parameter('text_scale').get_parameter_value().double_value
         self.arrow_shaft_d    = self.get_parameter('arrow_shaft_diameter').get_parameter_value().double_value
         self.arrow_head_d     = self.get_parameter('arrow_head_diameter').get_parameter_value().double_value
-        pub_rate              = self.get_parameter('publish_rate').get_parameter_value().double_value
+        self.publish_rate     = self.get_parameter('publish_rate').get_parameter_value().double_value
 
-        # task_id → Task (latest known state)
+        # In-memory store: task_id -> Task
         self._tasks: dict[str, Task] = {}
 
-        # ── Subscriptions ──────────────────────────────────────────────────
+        # ── QoS ────────────────────────────────────────────────────────────
         latching_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
         )
+
+        # ── Subscriptions ──────────────────────────────────────────────────
         self.create_subscription(
             TaskPool, '/fleet/task_pool', self._on_task_pool, latching_qos
         )
         self.create_subscription(
             Task, '/fleet/task_events', self._on_task_event, 10
         )
-        # Also watch world views so state updates from any robot are reflected
         self.create_subscription(
             WorldView, '/fleet/world_views', self._on_world_view, 10
         )
 
         # ── Publisher ──────────────────────────────────────────────────────
-        self._marker_pub = self.create_publisher(
-            MarkerArray, '/fleet/task_markers', 10
-        )
+        self._marker_pub = self.create_publisher(MarkerArray, '/fleet/task_markers', 10)
 
-        # Periodic publish
-        self.create_timer(1.0 / pub_rate, self._publish_markers)
+        # ── Timer ──────────────────────────────────────────────────────────
+        self.create_timer(1.0 / self.publish_rate, self._publish_markers)
 
         self.get_logger().info(
-            f'[fleet_visualizer] online | frame={self.frame_id} | '
-            f'rate={pub_rate} Hz | '
-            f'Topic: /fleet/task_markers'
+            f'Fleet Visualizer running at {self.publish_rate:.1f} Hz | Frame: {self.frame_id}'
         )
 
     # ── Subscription handlers ──────────────────────────────────────────────
@@ -125,7 +140,7 @@ class FleetVisualizer(Node):
     def _on_task_event(self, t: Task):
         existing = self._tasks.get(t.task_id)
         # Monotonic guard: never downgrade state from event stream
-        if existing is None or t.state >= existing.state:
+        if existing is None or _get_state_rank(t.state) >= _get_state_rank(existing.state):
             self._tasks[t.task_id] = t
         self._publish_markers()
 
@@ -142,7 +157,7 @@ class FleetVisualizer(Node):
             t.pickup_pose    = te.pickup_pose
             t.dropoff_pose   = te.dropoff_pose
 
-            if existing is None or t.state >= existing.state:
+            if existing is None or _get_state_rank(t.state) >= _get_state_rank(existing.state):
                 self._tasks[t.task_id] = t
                 updated = True
         if updated:

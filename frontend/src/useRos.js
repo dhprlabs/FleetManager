@@ -76,6 +76,21 @@ const STATE_LABELS = {
   7: 'Delivering',
 };
 
+const TASK_STATE_RANK = {
+  0: 0, // Available
+  1: 1, // Assigned / Allocated
+  2: 2, // In progress
+  6: 3, // Pickup done
+  7: 4, // Delivering
+  3: 5, // Completed
+  4: 5, // Failed
+  5: 5, // Cancelled
+};
+
+function getTaskRank(state) {
+  return TASK_STATE_RANK[state] ?? Number(state);
+}
+
 function taskProgress(state) {
   return { 0: 0, 1: 10, 2: 35, 3: 100, 4: 0, 5: 0, 6: 60, 7: 80 }[state] ?? 0;
 }
@@ -157,12 +172,30 @@ function getBridge() {
   return _bridge;
 }
 
+// ── Default Broadcaster / Dock Station Configuration ───────────────────────
+export const DEFAULT_DOCK_CONFIG = {
+  rosX: 5.0,
+  rosY: 12.0,
+  radiusMeters: 6.0,
+};
+
 // ── Main hook ───────────────────────────────────────────────────────────────
 export function useRos() {
   const [rosStatus, setRosStatus] = useState('connecting'); // 'connecting'|'connected'|'disconnected'|'error'
   const [liveRobots, setLiveRobots]   = useState(null);   // null = not yet received
   const [liveTasks, setLiveTasks]     = useState(null);
   const [liveBundles, setLiveBundles] = useState({});      // robot_id → Bundle msg
+  const [dockInfo, setDockInfo]       = useState(() => {
+    const svgPos = rosToSvg(DEFAULT_DOCK_CONFIG.rosX, DEFAULT_DOCK_CONFIG.rosY);
+    return {
+      rosX: DEFAULT_DOCK_CONFIG.rosX,
+      rosY: DEFAULT_DOCK_CONFIG.rosY,
+      radiusMeters: DEFAULT_DOCK_CONFIG.radiusMeters,
+      x: svgPos.x,
+      y: svgPos.y,
+      radiusPx: Math.round(DEFAULT_DOCK_CONFIG.radiusMeters / MAP_CONFIG.resolution),
+    };
+  });
   const robotIndexRef = useRef({});    // robot_id → palette index (stable)
   const taskMapRef    = useRef({});    // task_id  → merged task object
 
@@ -239,7 +272,7 @@ export function useRos() {
     const unsubEvents = bridge.subscribe('/fleet/task_events', (msg) => {
       const existing = taskMapRef.current[msg.task_id];
       // Monotonic guard: never downgrade state
-      if (!existing || msg.state >= existing.state) {
+      if (!existing || getTaskRank(msg.state) >= getTaskRank(existing.state)) {
         taskMapRef.current[msg.task_id] = msg;
         _flushTasks(setLiveTasks, taskMapRef.current);
       }
@@ -255,12 +288,27 @@ export function useRos() {
       let changed = false;
       (msg.task_states || []).forEach((t) => {
         const existing = taskMapRef.current[t.task_id];
-        if (!existing || t.state >= existing.state) {
+        if (!existing || getTaskRank(t.state) >= getTaskRank(existing.state)) {
           taskMapRef.current[t.task_id] = t;
           changed = true;
         }
       });
       if (changed) _flushTasks(setLiveTasks, taskMapRef.current);
+    });
+
+    // ── /fleet/dock_pose (broadcaster location and radio range) ───────────
+    const unsubDock = bridge.subscribe('/fleet/dock_pose', (msg) => {
+      const rx = msg.pose?.position?.x ?? DEFAULT_DOCK_CONFIG.rosX;
+      const ry = msg.pose?.position?.y ?? DEFAULT_DOCK_CONFIG.rosY;
+      const svgPos = rosToSvg(rx, ry);
+      setDockInfo({
+        rosX: rx,
+        rosY: ry,
+        radiusMeters: DEFAULT_DOCK_CONFIG.radiusMeters,
+        x: svgPos.x,
+        y: svgPos.y,
+        radiusPx: Math.round(DEFAULT_DOCK_CONFIG.radiusMeters / MAP_CONFIG.resolution),
+      });
     });
 
     return () => {
@@ -270,6 +318,7 @@ export function useRos() {
       unsubEvents();
       unsubBundles();
       unsubWV();
+      unsubDock();
     };
   }, [getRobotIndex]);
 
@@ -318,7 +367,7 @@ export function useRos() {
     return true;
   }, []);
 
-  return { rosStatus, liveRobots, liveTasks, liveBundles, broadcastTasks };
+  return { rosStatus, liveRobots, liveTasks, liveBundles, dockInfo, broadcastTasks };
 }
 
 // ── Convert taskMap → UI task array ─────────────────────────────────────────

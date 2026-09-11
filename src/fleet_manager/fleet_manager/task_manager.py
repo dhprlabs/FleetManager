@@ -10,13 +10,15 @@ Also propagates task state changes over P2P using TASK_STATUS messages.
 """
 
 import json
+import math
 import time
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
-from fleet_interfaces.msg import Task, TaskPool, WorldView, P2PMessage
+from geometry_msgs.msg import PoseWithCovarianceStamped
+from fleet_interfaces.msg import Task, TaskPool, WorldView, P2PMessage, RobotState
 from fleet_manager.fleet_state import FleetState, TaskEntry
 from fleet_manager.p2p_client import P2PClient
 
@@ -37,7 +39,22 @@ class TaskManager(Node):
 
         default_id = self.get_namespace().strip('/') or 'robot_1'
         self.declare_parameter('robot_id', default_id)
+        self.declare_parameter('dock_x', 5.0)
+        self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('communication_radius', 6.0)
+        self.declare_parameter('initial_x', 0.0)
+        self.declare_parameter('initial_y', 0.0)
+
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
+        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
+        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        init_x = self.get_parameter('initial_x').get_parameter_value().double_value
+        init_y = self.get_parameter('initial_y').get_parameter_value().double_value
+
+        self.current_x = init_x
+        self.current_y = init_y
+        self._has_pose = False  # Set True once robot_state or amcl_pose first arrives
 
         # Local distributed state store (tasks portion mirrors state_manager's)
         self.fs = FleetState(robot_id=self.robot_id)
@@ -49,6 +66,8 @@ class TaskManager(Node):
         )
 
         # ── Subscriptions ──────────────────────────────────────────────────
+        self.create_subscription(RobotState, 'robot_state', self._handle_robot_state, 10)
+        self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._handle_amcl_pose, 10)
         self.create_subscription(TaskPool, '/fleet/task_pool', self._handle_task_pool, latching_qos)
         self.create_subscription(Task, '/fleet/task_events', self._handle_task_event, 10)
 
@@ -69,11 +88,28 @@ class TaskManager(Node):
     # Ingest from Task Broadcaster
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _handle_robot_state(self, msg: RobotState):
+        self.current_x = msg.current_pose.pose.position.x
+        self.current_y = msg.current_pose.pose.position.y
+        self._has_pose = True
+
+    def _handle_amcl_pose(self, msg: PoseWithCovarianceStamped):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+        self._has_pose = True
+
     def _handle_task_pool(self, msg: TaskPool):
+        # Enforce physical radio range to dock station broadcaster
+        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
+        if dist_to_dock > self.comm_radius:
+            return
         for task in msg.tasks:
             self._ingest_task(task, from_broadcaster=True)
 
     def _handle_task_event(self, task: Task):
+        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
+        if dist_to_dock > self.comm_radius:
+            return
         self._ingest_task(task, from_broadcaster=True)
 
     def _ingest_task(self, task: Task, from_broadcaster: bool = False):

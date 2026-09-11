@@ -68,10 +68,10 @@ class P2PTransport(Node):
             except Exception as e:
                 self.get_logger().warn(f'Failed to parse dead_zones parameter: {e}')
 
-        # Current Robot Pose — suppressed until AMCL delivers first fix
+        # Current Robot Pose — starts with initial parameter, updated via AMCL/odom
         self._amcl_initialized = False
-        self.current_x = 0.0
-        self.current_y = 0.0
+        self.current_x = self.get_parameter('initial_x').get_parameter_value().double_value
+        self.current_y = self.get_parameter('initial_y').get_parameter_value().double_value
         self.current_z = 0.0
 
         # Peer Discovery & Connection State

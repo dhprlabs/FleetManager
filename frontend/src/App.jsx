@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { initialTasks, mapPaths, robots as mockRobots } from "./fleetData";
 import warehouseMap from "./asset/logistics_warehouse.png";
-import { useRos, rosToSvg, svgToRos } from "./useRos";
+import { useRos, svgToRos } from "./useRos";
 
 const baseViewBox = { x: 0, y: 0, w: 485, h: 484 };
 const axisEnd = 600;
@@ -93,7 +92,7 @@ function RobotStatusPanel({ robots }) {
     );
 }
 
-function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = [], onPointSelect }) {
+function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = [], onPointSelect, onZoomChange }) {
     const svgRef = useRef(null);
     const instructionRef = useRef(null);
     const [viewBox, setViewBox] = useState(baseViewBox);
@@ -103,6 +102,24 @@ function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = 
     const [instructionHovered, setInstructionHovered] = useState(false);
     const zoom = Math.round((baseViewBox.w / viewBox.w) * 100);
     const currentTaskNum = stagedTasks.length + 1;
+
+    useEffect(() => {
+        function reportScale() {
+            const rect = svgRef.current?.getBoundingClientRect();
+            if (!rect || !rect.width || !rect.height) return;
+            const pixelsPerMapUnit = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
+            onZoomChange?.({
+                zoom,
+                pixelsPerMeter: pixelsPerMapUnit * 20,
+            });
+        }
+
+        reportScale();
+        const observer = new ResizeObserver(reportScale);
+        if (svgRef.current) observer.observe(svgRef.current);
+        return () => observer.disconnect();
+    }, [onZoomChange, viewBox.h, viewBox.w, zoom]);
+
     function activeLabelPosition(point) {
         const overlapsExisting = [...tasks, ...stagedTasks].some((task) =>
             [task.start, task.end].some((endpoint) =>
@@ -212,10 +229,10 @@ function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = 
         onPointSelect({ x: Math.round(point.x), y: Math.round(point.y) });
     }
     return (
-        <section className="relative min-h-[300px] flex-1 overflow-hidden bg-[#1e2320]">
+        <section className="relative flex min-h-[300px] flex-1 flex-col overflow-hidden bg-[#CFCFCF]">
             <svg
                 ref={svgRef}
-                className={`block h-full w-full select-none bg-[#1e2320] ${selectionMode ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab"}`}
+            className={`block min-h-0 w-full flex-1 select-none bg-[#CFCFCF] ${selectionMode ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab"}`}
                 style={{ userSelect: "none" }}
                 viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
                 onWheel={handleWheel}
@@ -456,13 +473,6 @@ function MapPanel({ robots, selectionMode, selectedPoints, tasks, stagedTasks = 
                 </div>
             )}
 
-            {/* Scale Bar: 5 meters = 100px (0.05m / px) */}
-            <div className="absolute bottom-4 left-4 z-[6] flex items-center gap-2 rounded-[8px] border border-[#e3e6e1] bg-white/95 px-2.5 py-1 text-[11px] font-medium text-[#4a554e] shadow-sm backdrop-blur-sm">
-                <div className="relative h-2 w-[100px] border-b-2 border-l-2 border-r-2 border-[#2f6f5e]" />
-                <span>5m</span>
-                <span className="text-[#8e988f]">• {zoom}%</span>
-            </div>
-
             <div className="absolute bottom-4 right-4 z-[6] flex flex-col overflow-hidden rounded-[9px] border border-[#e3e6e1] bg-white shadow-[0_2px_8px_rgb(27_35_31_/_6%)]">
                 <button
                     className="h-[34px] w-[34px] border-b border-[#eceee9] bg-white text-base text-[#1b231f] hover:bg-[#f7f8f6]"
@@ -498,7 +508,6 @@ function TaskStatusPanel({
     onCancel,
     onDelete,
     onBroadcastStaged,
-    onStageFive,
     onRemoveStaged,
     onClearStaged,
 }) {
@@ -513,26 +522,17 @@ function TaskStatusPanel({
                 </h2>
                 <div className="flex items-center gap-1.5">
                     <button
-                        className="flex items-center gap-1 rounded-full border border-[#d6ded8] bg-[#f7f8f6] px-2.5 py-1 text-[11px] font-semibold text-[#4a554e] hover:bg-[#eceee9] transition-colors"
-                        onClick={onStageFive}
-                        title="Quick-fill 5 warehouse tasks"
-                    >
-                        <span>⚡</span>
-                        <span>5 Preset</span>
-                    </button>
-                    <button
-                        className={`flex items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-                            selectionMode
-                                ? "bg-[#f6e4e1] text-[#c0453b] hover:bg-[#efc7c2]"
-                                : "bg-[#e4efe9] text-[#2f6f5e] hover:bg-[#d9ecdf]"
-                        }`}
+                        className={`relative flex h-6 w-[92px] items-center justify-start rounded-full pl-7 pr-2.5 text-[11px] font-semibold transition-colors ${selectionMode
+                            ? "bg-[#f6e4e1] text-[#c0453b] hover:bg-[#efc7c2]"
+                            : "bg-[#e4efe9] text-[#2f6f5e] hover:bg-[#d9ecdf]"
+                            }`}
                         onClick={selectionMode ? onCancel : onAdd}
                         aria-label={selectionMode ? "Cancel staging" : "Add task via map"}
                     >
-                        <span className={`mr-1 inline-block text-xs leading-none transition-transform duration-200 ${selectionMode ? "rotate-45" : "rotate-0"}`}>
+                        <span className={`absolute left-2.5 top-1/2 inline-block w-3 -translate-y-1/2 text-center text-xs leading-none transition-transform duration-200 ${selectionMode ? "rotate-45" : "rotate-0"}`}>
                             +
                         </span>
-                        {selectionMode ? "Cancel" : "Add on map"}
+                        {selectionMode ? "Cancel" : "Add Task"}
                     </button>
                 </div>
             </div>
@@ -543,7 +543,7 @@ function TaskStatusPanel({
                     <div className="flex items-center justify-between pb-1.5 border-b border-[#2f6f5e]/15">
                         <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-[#2f6f5e]">
                             <span className="inline-block h-2 w-2 rounded-full bg-[#2f6f5e] animate-pulse" />
-                            STAGED BATCH ({stagedTasks.length})
+                            STAGED BATCH
                         </span>
                         <button
                             onClick={onClearStaged}
@@ -576,7 +576,7 @@ function TaskStatusPanel({
                         onClick={onBroadcastStaged}
                         className="w-full flex items-center justify-center gap-1.5 rounded-[7px] bg-[#2f6f5e] py-1.5 text-xs font-bold text-white shadow-sm hover:bg-[#265b4d] active:scale-[0.99] transition-all"
                     >
-                        <span>🚀</span>
+                        <span></span>
                         <span>Broadcast Fleet Tasks ({stagedTasks.length})</span>
                     </button>
                 </div>
@@ -605,12 +605,11 @@ function TaskStatusPanel({
                             <div className="text-[12.5px] font-bold text-[#1b231f]">{task.name}</div>
                             <div className="flex items-center gap-1.5">
                                 <div
-                                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                                        task.state === 3 ? 'bg-[#e4efe9] text-[#2f6f5e]'
+                                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${task.state === 3 ? 'bg-[#e4efe9] text-[#2f6f5e]'
                                         : task.state === 2 || task.state === 6 || task.state === 7 ? 'bg-[#fdf3e4] text-[#c97a2b]'
-                                        : task.assigned ? 'bg-[#e8e8f7] text-[#5a50a0]'
-                                        : 'bg-[#eceee9] text-[#6b776f]'
-                                    }`}
+                                            : task.assigned ? 'bg-[#e8e8f7] text-[#5a50a0]'
+                                                : 'bg-[#eceee9] text-[#6b776f]'
+                                        }`}
                                 >
                                     {task.stateLabel || (task.assigned ? 'Assigned' : 'Available')}
                                 </div>
@@ -696,7 +695,24 @@ function getTimelineRows(tasks) {
     }));
 }
 
-function EfficiencyPanel({ tasks }) {
+function MapScale({ mapScale }) {
+    const scaleOptions = [0.5, 1, 2, 5, 10, 20, 50];
+    const zoom = mapScale?.zoom ?? 100;
+    const pixelsPerMeter = mapScale?.pixelsPerMeter ?? 20;
+    const distance = [...scaleOptions].reverse().find((option) => option * pixelsPerMeter <= 130) || 0.5;
+    const width = Math.max(24, Math.round(distance * pixelsPerMeter));
+
+    return (
+        <div className="flex items-center gap-2 rounded-[7px] border border-[#e3e6e1] bg-[#f7f8f6] px-2.5 py-1 text-[10.5px] font-medium text-[#4a554e]" aria-label={`Map scale: ${distance} meters at ${zoom}% zoom`}>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8e988f]">Scale</span>
+            <div className="relative h-2 border-b-2 border-l-2 border-r-2 border-[#2f6f5e]" style={{ width }} />
+            <span className="whitespace-nowrap">{distance} m</span>
+            <span className="text-[#8e988f]">{zoom}%</span>
+        </div>
+    );
+}
+
+function EfficiencyPanel({ tasks, mapZoom }) {
     const [fullScreen, setFullScreen] = useState(false);
     const [minimized, setMinimized] = useState(false);
 
@@ -704,10 +720,13 @@ function EfficiencyPanel({ tasks }) {
         <section
             className={`flex flex-none flex-col border-t border-[#c4cbc5] bg-white ${fullScreen ? "fixed inset-0 z-40 h-screen" : minimized ? "h-9" : "h-[270px] md:h-[248px]"}`}
         >
-            <div className="flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
-                <h2 className="m-0 text-[13px] font-semibold" style={displayFont}>
+            <div className="relative flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
+                <h2 className="m-0 whitespace-nowrap text-[13px] font-semibold" style={displayFont}>
                     EFFICIENCY <i>TIMELINE</i>
                 </h2>
+                <div className="absolute left-1/2 -translate-x-1/2">
+                    {!minimized && !fullScreen && <MapScale mapScale={mapZoom} />}
+                </div>
                 <div className="flex items-center gap-1">
                     <button
                         className="relative flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
@@ -737,89 +756,100 @@ function EfficiencyPanel({ tasks }) {
                             />
                         </svg>
                     </button>
-                    <button
-                        className="flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
-                        aria-label={minimized ? "Show chart" : "Minimize chart"}
-                        onClick={() => {
-                            setMinimized((current) => !current);
-                            setFullScreen(false);
-                        }}
-                    >
-                        <span className="h-px w-3 bg-[#6b776f]" />
-                    </button>
+                    {!fullScreen && (
+                        <button
+                            className="flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
+                            aria-label={minimized ? "Show chart" : "Minimize chart"}
+                            title={minimized ? "Show timeline" : "Minimize timeline"}
+                            onClick={() => {
+                                setMinimized((current) => !current);
+                                setFullScreen(false);
+                            }}
+                        >
+                            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                <path
+                                    d={minimized ? "m6 14 6-6 6 6" : "m6 10 6 6 6-6"}
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                />
+                            </svg>
+                        </button>
+                    )}
                 </div>
             </div>
             {!minimized && (
                 <div className="min-h-0 flex-1 overflow-auto px-3.5 pb-3.5 md:px-5">
-                <div className="flex min-w-[640px]">
-                    <div className="sticky left-0 z-[3] w-[140px] flex-none bg-white pt-[34px] md:w-[180px]">
-                        {getTimelineRows(tasks).map((row) => (
-                            <div
-                                className="flex h-[30px] items-center gap-1 text-xs font-medium"
-                                key={row.label}
-                            >
-                                <span>{row.label}</span>
-                                <span
-                                    className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ${row.bars[0].status === "delayed" ? "bg-[#f6e4e1] text-[#c0453b]" : "bg-[#e4efe9] text-[#2f6f5e]"}`}
-                                >
-                                    {row.bars[0].status === "delayed"
-                                        ? "Delayed"
-                                        : row.bars[0].status === "done"
-                                            ? "Completed"
-                                            : row.bars[0].status === "scheduled"
-                                                ? "Unassigned"
-                                                : "In progress"}
-                                </span>
-                            </div>
-                        ))}
-                    </div>
-                    <div className="relative min-w-0 flex-1">
-                    <div className="relative h-[34px] border-b border-[#eceee9]">
-                        {Array.from({ length: 11 }, (_, index) => (
-                            <div
-                                className={`absolute top-2 text-[10.5px] text-[#8e988f] ${index === 0 ? "" : index === 10 ? "-translate-x-full" : "-translate-x-1/2"}`}
-                                style={{ left: `${index * 10}%` }}
-                                key={index}
-                            >{`${8 + index}:00`}</div>
-                        ))}
-                    </div>
-                    {getTimelineRows(tasks).map((row) => (
-                        <div
-                            className="relative h-[30px] border-b border-[#eceee9]"
-                            key={row.label}
-                        >
-                            {row.bars.map((bar) => (
+                    <div className="flex min-w-[640px]">
+                        <div className="sticky left-0 z-[3] w-[140px] flex-none bg-white pt-[34px] md:w-[180px]">
+                            {getTimelineRows(tasks).map((row) => (
                                 <div
-                                    className={`absolute top-1.5 h-[18px] overflow-hidden rounded-[5px] ${bar.status === "scheduled" ? "border border-dashed border-[#8e988f] bg-transparent" : bar.status === "delayed" ? "border border-[#c0453b] bg-[#f6e4e1]" : "border border-[#2f6f5e] bg-[#e4efe9]"}`}
-                                    style={{
-                                        left: `${(bar.start / axisEnd) * 100}%`,
-                                        width: `${((bar.end - bar.start) / axisEnd) * 100}%`,
-                                    }}
-                                    key={`${row.label}-${bar.start}`}
+                                    className="flex h-[30px] items-center gap-1 text-xs font-medium"
+                                    key={row.label}
                                 >
-                                    {bar.status !== "scheduled" && (
-                                        <div
-                                            className={`h-full opacity-85 ${bar.status === "delayed" ? "bg-[#c0453b]" : "bg-[#2f6f5e]"}`}
-                                            style={{ width: `${bar.progress}%` }}
-                                        />
-                                    )}
+                                    <span>{row.label}</span>
+                                    <span
+                                        className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ${row.bars[0].status === "delayed" ? "bg-[#f6e4e1] text-[#c0453b]" : "bg-[#e4efe9] text-[#2f6f5e]"}`}
+                                    >
+                                        {row.bars[0].status === "delayed"
+                                            ? "Delayed"
+                                            : row.bars[0].status === "done"
+                                                ? "Completed"
+                                                : row.bars[0].status === "scheduled"
+                                                    ? "Unassigned"
+                                                    : "In progress"}
+                                    </span>
                                 </div>
                             ))}
                         </div>
-                    ))}
-                    <div
-                        className="absolute top-0 z-[2] w-[1.5px] bg-[#c97a2b]"
-                        style={{
-                            left: `${(now / axisEnd) * 100}%`,
-                            height: `${getTimelineRows(tasks).length * 30 + 34}px`,
-                        }}
-                    >
-                        <span className="absolute -top-[18px] left-1 text-[10px] font-semibold text-[#c97a2b]">
-                            now
-                        </span>
+                        <div className="relative min-w-0 flex-1">
+                            <div className="relative h-[34px] border-b border-[#eceee9]">
+                                {Array.from({ length: 11 }, (_, index) => (
+                                    <div
+                                        className={`absolute top-2 text-[10.5px] text-[#8e988f] ${index === 0 ? "" : index === 10 ? "-translate-x-full" : "-translate-x-1/2"}`}
+                                        style={{ left: `${index * 10}%` }}
+                                        key={index}
+                                    >{`${8 + index}:00`}</div>
+                                ))}
+                            </div>
+                            {getTimelineRows(tasks).map((row) => (
+                                <div
+                                    className="relative h-[30px] border-b border-[#eceee9]"
+                                    key={row.label}
+                                >
+                                    {row.bars.map((bar) => (
+                                        <div
+                                            className={`absolute top-1.5 h-[18px] overflow-hidden rounded-[5px] ${bar.status === "scheduled" ? "border border-dashed border-[#8e988f] bg-transparent" : bar.status === "delayed" ? "border border-[#c0453b] bg-[#f6e4e1]" : "border border-[#2f6f5e] bg-[#e4efe9]"}`}
+                                            style={{
+                                                left: `${(bar.start / axisEnd) * 100}%`,
+                                                width: `${((bar.end - bar.start) / axisEnd) * 100}%`,
+                                            }}
+                                            key={`${row.label}-${bar.start}`}
+                                        >
+                                            {bar.status !== "scheduled" && (
+                                                <div
+                                                    className={`h-full opacity-85 ${bar.status === "delayed" ? "bg-[#c0453b]" : "bg-[#2f6f5e]"}`}
+                                                    style={{ width: `${bar.progress}%` }}
+                                                />
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ))}
+                            <div
+                                className="absolute top-0 z-[2] w-[1.5px] bg-[#c97a2b]"
+                                style={{
+                                    left: `${(now / axisEnd) * 100}%`,
+                                    height: `${getTimelineRows(tasks).length * 30 + 34}px`,
+                                }}
+                            >
+                                <span className="absolute -top-[18px] left-1 text-[10px] font-semibold text-[#c97a2b]">
+                                    now
+                                </span>
+                            </div>
+                        </div>
                     </div>
-                </div>
-                </div>
                 </div>
             )}
         </section>
@@ -909,10 +939,10 @@ function App() {
     const { rosStatus, liveRobots, liveTasks, broadcastTasks } = useRos();
 
     // Use live data when available, fall back to mock data
-    const robots = liveRobots ?? mockRobots;
+    const robots = liveRobots ?? [];
 
     // ── Task state (static + live merged) ─────────────────────────────────
-    const [tasks, setTasks] = useState(initialTasks);
+    const [tasks, setTasks] = useState([]);
     // When live tasks arrive from ROS, replace the task list entirely
     useEffect(() => {
         if (liveTasks !== null) setTasks(liveTasks);
@@ -922,6 +952,7 @@ function App() {
     const [stagedTasks, setStagedTasks] = useState([]);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedPoints, setSelectedPoints] = useState([]);
+    const [mapZoom, setMapZoom] = useState({ zoom: 100, pixelsPerMeter: 20 });
     const [taskToDelete, setTaskToDelete] = useState(null);
     const [toastMessage, setToastMessage] = useState("");
 
@@ -981,36 +1012,11 @@ function App() {
         }
     }
 
-    // Quick-fills 5 preset warehouse tasks across open aisles
-    function stageFiveWarehouseTasks() {
-        const samples = [
-            { id: "T1", p: { x: 2.0, y: 1.0 }, d: { x: -2.0, y: -1.0 }, pri: 2 },
-            { id: "T2", p: { x: 3.5, y: 1.0 }, d: { x: -3.5, y: -1.0 }, pri: 1 },
-            { id: "T3", p: { x: 2.0, y: -2.5 }, d: { x: -2.0, y: 2.5 }, pri: 3 },
-            { id: "T4", p: { x: 4.0, y: -2.5 }, d: { x: -4.0, y: 2.5 }, pri: 1 },
-            { id: "T5", p: { x: 1.0, y: 3.0 }, d: { x: -1.0, y: -3.0 }, pri: 2 },
-        ];
-        const newStaged = samples.map((s, idx) => ({
-            id: `staged-${s.id}-${Date.now()}`,
-            number: idx + 1,
-            name: s.id,
-            start: rosToSvg(s.p.x, s.p.y),
-            end: rosToSvg(s.d.x, s.d.y),
-            pickupRos: s.p,
-            dropoffRos: s.d,
-            priority: s.pri,
-        }));
-        setStagedTasks(newStaged);
-        setSelectionMode(false);
-        setSelectedPoints([]);
-        setToastMessage("Pre-staged 5 warehouse tasks! Click 'Broadcast Fleet Tasks' to send all 5 to the robots.");
-    }
-
     function handleBroadcastStaged() {
         if (stagedTasks.length === 0) return;
         const sent = broadcastTasks(stagedTasks);
         if (sent) {
-            setToastMessage(`🚀 Broadcasted ${stagedTasks.length} tasks to fleet as AVAILABLE!`);
+            setToastMessage(` Broadcasted ${stagedTasks.length} tasks to fleet as AVAILABLE!`);
             setStagedTasks([]);
             setSelectionMode(false);
         } else {
@@ -1060,16 +1066,14 @@ function App() {
                 </div>
                 <div className="hidden h-[22px] w-px bg-[#e3e6e1] md:block" />
                 {/* ROS connection status badge */}
-                <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
-                    rosStatus === 'connected' ? 'bg-[#e4efe9] text-[#2f6f5e]'
-                    : rosStatus === 'error'   ? 'bg-[#f6e4e1] text-[#c0453b]'
-                    : 'bg-[#eceee9] text-[#8e988f]'
-                }`}>
-                    <span className={`h-[7px] w-[7px] rounded-full ${
-                        rosStatus === 'connected' ? 'bg-[#2f6f5e] animate-pulse'
-                        : rosStatus === 'error'   ? 'bg-[#c0453b]'
-                        : 'bg-[#8e988f]'
-                    }`} />
+                <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${rosStatus === 'connected' ? 'bg-[#e4efe9] text-[#2f6f5e]'
+                    : rosStatus === 'error' ? 'bg-[#f6e4e1] text-[#c0453b]'
+                        : 'bg-[#eceee9] text-[#8e988f]'
+                    }`}>
+                    <span className={`h-[7px] w-[7px] rounded-full ${rosStatus === 'connected' ? 'bg-[#2f6f5e] animate-pulse'
+                        : rosStatus === 'error' ? 'bg-[#c0453b]'
+                            : 'bg-[#8e988f]'
+                        }`} />
                     {rosStatus === 'connected' ? 'ROS Live' : rosStatus === 'error' ? 'ROS Error' : 'ROS Connecting…'}
                 </div>
                 <div className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-sm font-semibold" style={displayFont}>
@@ -1100,6 +1104,7 @@ function App() {
                         tasks={tasks}
                         stagedTasks={stagedTasks}
                         onPointSelect={handlePointSelect}
+                        onZoomChange={setMapZoom}
                     />
                     <TaskStatusPanel
                         tasks={tasks}
@@ -1109,12 +1114,11 @@ function App() {
                         onCancel={cancelTaskSelection}
                         onDelete={requestDeleteTask}
                         onBroadcastStaged={handleBroadcastStaged}
-                        onStageFive={stageFiveWarehouseTasks}
                         onRemoveStaged={removeStagedTask}
                         onClearStaged={clearStagedTasks}
                     />
                 </div>
-                <EfficiencyPanel tasks={tasks} />
+                <EfficiencyPanel tasks={tasks} mapZoom={mapZoom} />
             </main>
             {taskToDelete && (
                 <DeleteTaskDialog

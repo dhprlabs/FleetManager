@@ -1,54 +1,90 @@
 #!/usr/bin/env python3
 """
-Max-Sum Engine — Core Factor Graph Message Passing Algorithm
--------------------------------------------------------------
-Implements the decentralized Max-Sum algorithm for multi-robot task allocation.
+Damped Binary Max-Sum Engine
+----------------------------
+Implements Damped Binary (Decomposed) Max-Sum for decentralised multi-robot
+task allocation.
 
-Workflow per round:
-1. Initialize messages q_{v->f} and r_{f->v}
-2. Compute local utilities U(i, t)
-3. For each iteration:
-   a. Compute Variable -> Factor messages (q_{v->f}) with damping and normalization
-   b. Compute Factor -> Variable messages (r_{f->v}) via closed-form exclusivity
-   c. Update marginal beliefs b_v(d)
-   d. Check convergence (delta < threshold or stable assignment)
-   e. Log iteration progress, sender/receiver, utility, and current beliefs
-4. Iteration limit fallback if convergence is not reached
-5. Extract final task ownership assignments
+Key differences from standard Max-Sum
+--------------------------------------
+* **Binary decomposition**: the multi-task factor graph is split into |T|
+  independent binary sub-problems.  For each task j, every robot i has a
+  binary variable x_{i,j} ∈ {0, 1} ("take task j" / "don't take task j").
+  This avoids the O(|R| × |T|) domain and the O(|T|!) permutation explosion.
+
+* **Scalar messages**: q_{i→j} and r_{j→i} are single scalars (net gain /
+  opportunity cost), not full domain vectors.  This makes the update rules
+  extremely cheap and easy to damp without numerical drift.
+
+* **Damping**: new_msg = (1 - γ) * computed + γ * old_msg  (γ = damping_factor).
+
+* **Convergence**: declared when max |Δmessage| < convergence_threshold for
+  ``stable_iterations_required`` consecutive rounds, or max_iterations reached.
+
+* **Deterministic tie-breaking**: argmax over robots sorted lexicographically.
+
+* **THOP-style pruning** (Threshold-based Opportunity-cost Pruning):
+  before iteration starts, compute the greedy utility of every (robot, task)
+  pair and prune robot-task pairs whose utility is below
+  ``max_utility_for_task - prune_threshold``.  This reduces message traffic
+  and accelerates convergence.
+
+Workflow
+--------
+1.  Compute raw utilities U[i][j] = calculate_robot_task_utility(robot_i, task_j).
+2.  THOP pruning: build candidate sets C[j] ⊆ robots for each task j.
+3.  Initialise q[i][j] = 0, r[j][i] = 0 for all (i,j) ∈ C.
+4.  For each iteration:
+    a. Update r_{j→i}:  r[j][i] = max_{k≠i, k∈C[j]} (U[k][j] + q[k][j])
+                                  (opportunity cost: best competing bid)
+       Damping: r[j][i] = (1-γ)*r_new + γ*r_old
+    b. Update q_{i→j}:  q[i][j] = U[i][j] - max_{j'≠j} max(0, r[j'][i] + U[i][j'] - r[j'][i])
+       Simplified:       q[i][j] = U[i][j] - best_alt_net_gain(i, j)
+       Damping: q[i][j] = (1-γ)*q_new + γ*q_old
+    c. Belief:  b[i][j] = U[i][j] + r[j][i]   (marginal gain of robot i taking task j)
+    d. Assignment: for each task j, winner = argmax_{i∈C[j]} b[i][j]
+                   only if b[winner][j] > 0  (otherwise task stays unassigned)
+    e. Resolve conflicts: if robot i is winner of multiple tasks, keep the
+       highest-belief one.
+    f. Check convergence.
+5.  Return ownership dict {task_id → robot_id}.
 """
 
 import math
-from typing import Dict, List, Any, Optional, Tuple, Callable
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple, Callable, Set
+from dataclasses import dataclass
 
 from fleet_manager.factor_graph import (
     RobotInfo,
     TaskInfo,
     UtilityWeights,
-    VariableNode,
-    TaskExclusivityFactor,
-    RobotUtilityFactor,
-    FactorGraph,
-    VariableToFactorMessage,
-    FactorToVariableMessage,
     calculate_robot_task_utility,
-    build_task_allocation_factor_graph,
 )
 
 
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
 @dataclass
 class MaxSumConfig:
-    """Configuration parameters for Max-Sum solver."""
-    max_iterations: int = 20            # Max iterations before fallback
-    convergence_threshold: float = 1e-3 # Max belief difference for convergence
-    damping_factor: float = 0.4        # Damping factor gamma in [0.0, 1.0)
-    stable_iterations_required: int = 2 # Consecutive stable iterations to declare convergence
-    verbose: bool = True               # Enable detailed debug logging
+    """Configuration parameters for Damped Binary Max-Sum solver."""
+    max_iterations: int = 20             # Hard iteration cap
+    convergence_threshold: float = 1e-2  # Max message delta to declare convergence
+    damping_factor: float = 0.5          # γ ∈ [0, 1): higher → slower, more stable
+    stable_iterations_required: int = 2  # Consecutive stable iters to stop early
+    prune_threshold: float = 15.0        # THOP pruning margin (utility units)
+    hysteresis_bonus: float = 0.15       # Stability hysteresis bonus for incumbent owner
+    verbose: bool = True                 # Enable iteration logging
 
+
+# ---------------------------------------------------------------------------
+# Iteration Log (audit trail)
+# ---------------------------------------------------------------------------
 
 @dataclass
 class MaxSumIterationLog:
-    """Detailed log record for each iteration step."""
+    """Single record logged per iteration."""
     iteration: int
     sender: str
     receiver: str
@@ -59,330 +95,383 @@ class MaxSumIterationLog:
     current_selected_owner: str
 
 
+# ---------------------------------------------------------------------------
+# Damped Binary Max-Sum Solver
+# ---------------------------------------------------------------------------
+
 class MaxSumSolver:
     """
-    Decentralized Factor Graph Max-Sum solver.
-    Operates on a FactorGraph instance with VariableNodes and FactorNodes.
+    Damped Binary (Decomposed) Max-Sum solver.
+
+    Operates on a fleet of robots and tasks directly — no FactorGraph object
+    needed (the factor graph is implicit in the binary decomposition).
     """
+
     def __init__(
         self,
-        graph: FactorGraph,
+        robots: List[RobotInfo],
+        tasks: List[TaskInfo],
+        weights: Optional[UtilityWeights] = None,
         config: Optional[MaxSumConfig] = None,
-        log_callback: Optional[Callable[[str], None]] = None
+        log_callback: Optional[Callable[[str], None]] = None,
+        incumbents: Optional[Dict[str, str]] = None,
     ):
-        self.graph = graph
+        self.robots = robots
+        self.tasks = tasks
+        self.weights = weights or UtilityWeights()
         self.config = config or MaxSumConfig()
-        self.log_callback = log_callback or (lambda msg: None)
+        self.log_callback = log_callback or (lambda m: None)
+        self.incumbents = incumbents or {}
 
-        # Message stores:
-        # q_messages[(var_name, factor_name)] = {val: utility}
-        self.q_messages: Dict[Tuple[str, str], Dict[str, float]] = {}
-        # r_messages[(factor_name, var_name)] = {val: utility}
-        self.r_messages: Dict[Tuple[str, str], Dict[str, float]] = {}
+        self.robot_ids: List[str] = [r.robot_id for r in robots]
+        self.task_ids: List[str] = [t.task_id for t in tasks]
+        self._robot_map: Dict[str, RobotInfo] = {r.robot_id: r for r in robots}
+        self._task_map: Dict[str, TaskInfo] = {t.task_id: t for t in tasks}
 
-        # Belief store: beliefs[var_name] = {val: total_utility}
+        # Raw utility table U[robot_id][task_id]
+        self.U: Dict[str, Dict[str, float]] = {}
+        # Binary messages
+        self.q: Dict[str, Dict[str, float]] = {}   # q[robot_id][task_id]
+        self.r: Dict[str, Dict[str, float]] = {}   # r[task_id][robot_id]
+        # Beliefs: b[robot_id][task_id]
         self.beliefs: Dict[str, Dict[str, float]] = {}
-        self.previous_beliefs: Dict[str, Dict[str, float]] = {}
+        # Current assignment: task_id -> robot_id
+        self.assignment: Dict[str, str] = {}
+        self.prev_assignment: Dict[str, str] = {}
 
-        # Current best assignment: {var_name: domain_val}
-        self.current_assignment: Dict[str, str] = {}
-        self.previous_assignment: Dict[str, str] = {}
+        # THOP candidate sets: C[task_id] = set of robot_ids eligible
+        self.candidates: Dict[str, Set[str]] = {}
 
-        # Detailed step-by-step audit logs
+        # Audit logs
         self.iteration_logs: List[MaxSumIterationLog] = []
 
-        self._initialize_messages()
+        self._build_utilities()
+        self._thop_pruning()
+        self._init_messages()
+
+    # -----------------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------------
 
     def _log(self, text: str) -> None:
         if self.config.verbose:
             self.log_callback(text)
 
-    def _initialize_messages(self) -> None:
-        """Initializes all q and r messages to zero over variable domains."""
-        for vname, var in self.graph.variables.items():
-            for fname, factor in var.neighbors.items():
-                self.q_messages[(vname, fname)] = {val: 0.0 for val in var.domain}
-                self.r_messages[(fname, vname)] = {val: 0.0 for val in var.domain}
+    def _build_utilities(self) -> None:
+        """Compute U[robot][task] for all pairs (feasibility = -inf)."""
+        for robot in self.robots:
+            self.U[robot.robot_id] = {}
+            for task in self.tasks:
+                u, _ = calculate_robot_task_utility(robot, task, self.weights)
+                # Hard feasibility: battery check
+                if robot.battery_level < robot.battery_min_threshold:
+                    u = float('-inf')
+                elif self.incumbents and self.incumbents.get(task.task_id) == robot.robot_id:
+                    # Incumbent stability bonus prevents allocation thrashing on tiny deltas
+                    u += self.config.hysteresis_bonus
+                self.U[robot.robot_id][task.task_id] = u
 
-        for vname, var in self.graph.variables.items():
-            self.beliefs[vname] = {val: 0.0 for val in var.domain}
-            self.previous_beliefs[vname] = {val: 0.0 for val in var.domain}
-            self.current_assignment[vname] = 'none'
-
-    def compute_variable_to_factor(self, var_name: str, target_factor_name: str) -> Dict[str, float]:
+    def _thop_pruning(self) -> None:
         """
-        Computes q_{v -> f}(x_v):
-        q_{v -> f}(x_v) = alpha + U(v, x_v) + sum_{f' in N(v) \\ {f}} r_{f' -> v}(x_v)
-        Applies damping: q = (1 - gamma)*q_new + gamma*q_old
-        Applies mean normalization: alpha = - (1/|D|) sum q(x)
+        THOP-style pruning: for each task j, keep only robots whose utility
+        is within `prune_threshold` of the best robot for that task.
+        Infeasible robots (-inf) are always pruned.
         """
-        var = self.graph.variables[var_name]
-        q_new: Dict[str, float] = {}
+        for task in self.tasks:
+            tj = task.task_id
+            utils = {
+                rid: self.U[rid][tj]
+                for rid in self.robot_ids
+                if not math.isinf(self.U[rid][tj])
+            }
+            if not utils:
+                self.candidates[tj] = set()
+                continue
+            best = max(utils.values())
+            threshold = best - self.config.prune_threshold
+            self.candidates[tj] = {
+                rid for rid, u in utils.items() if u >= threshold
+            }
 
-        # Local utility from connected RobotUtilityFactor (if present)
-        unary_factor_name = f"U_{var_name}"
-        unary_factor = self.graph.factors.get(unary_factor_name)
-
-        for val in var.domain:
-            # Base utility
-            val_util = 0.0
-            if unary_factor and target_factor_name != unary_factor_name:
-                val_util = unary_factor.evaluate({var_name: val})
-                if math.isinf(val_util) and val_util < 0:
-                    val_util = -1e6
-
-            # Sum of incoming messages from other factors
-            incoming_sum = 0.0
-            for fname in var.neighbors:
-                if fname != target_factor_name and fname != unary_factor_name:
-                    incoming_sum += self.r_messages.get((fname, var_name), {}).get(val, 0.0)
-
-            raw_q = val_util + incoming_sum
-
-            # Damping with previous q value
-            prev_q = self.q_messages.get((var_name, target_factor_name), {}).get(val, 0.0)
-            damped_q = (1.0 - self.config.damping_factor) * raw_q + self.config.damping_factor * prev_q
-            q_new[val] = damped_q
-
-        # Mean-normalization to keep values bounded
-        vals = list(q_new.values())
-        if vals:
-            mean_val = sum(vals) / len(vals)
-            for k in q_new:
-                q_new[k] -= mean_val
-
-        return q_new
-
-    def compute_factor_to_variable(self, factor_name: str, target_var_name: str) -> Dict[str, float]:
-        """
-        Computes r_{f -> v}(x_v).
-        Specialized closed-form formulation for TaskExclusivityFactor:
-        - For x_v = T: sum_{k != v} max_{d' != T} q_{k->f}(d')
-        - For x_v != T: sum_{k != v} max_{d' != T} q_{k->f}(d') + max(0, max_{j != v} [q_{j->f}(T) - max_{d' != T} q_{j->f}(d')])
-        """
-        factor = self.graph.factors[factor_name]
-        var = self.graph.variables[target_var_name]
-        r_new: Dict[str, float] = {}
-
-        if isinstance(factor, TaskExclusivityFactor):
-            task_id = factor.task_id
-            reward = factor.reward
-            other_vars = [v for v in factor.neighbors if v != target_var_name]
-
-            # For each other robot k, compute max_{d' != task_id} q_{k->f}(d')
-            max_non_t: Dict[str, float] = {}
-            q_t: Dict[str, float] = {}
-
-            for ov in other_vars:
-                q_ov = self.q_messages.get((ov, factor_name), {})
-                non_t_vals = [q_ov[d] for d in q_ov if d != task_id]
-                max_non_t[ov] = max(non_t_vals) if non_t_vals else 0.0
-                q_t[ov] = q_ov.get(task_id, -1e6)
-
-            sum_max_non_t = sum(max_non_t.values())
-
-            # Best gain if one other robot takes task_id: (q_t[j] + reward - max_non_t[j])
-            max_gain = 0.0
-            for ov in other_vars:
-                gain = (q_t[ov] + reward) - max_non_t[ov]
-                if gain > max_gain:
-                    max_gain = gain
-
-            # Populate r_new for each value in target variable's domain
-            for val in var.domain:
-                if val == task_id:
-                    # Robot takes the task: earns reward, no other robot takes it
-                    r_new[val] = sum_max_non_t + reward
-                else:
-                    # Robot does NOT take task: at most one other robot may take it
-                    r_new[val] = sum_max_non_t + max_gain
-
-        elif isinstance(factor, RobotUtilityFactor):
-            # Unary factor: message to own variable is just the local utility
-            for val in var.domain:
-                r_new[val] = factor.evaluate({target_var_name: val})
-        else:
-            for val in var.domain:
-                r_new[val] = 0.0
-
-        # Mean-normalization on r message to keep values bounded
-        r_vals = list(r_new.values())
-        if r_vals:
-            mean_r = sum(r_vals) / len(r_vals)
-            for k in r_new:
-                r_new[k] -= mean_r
-
-        return r_new
-
-    def update_beliefs(self) -> None:
-        """
-        Calculates marginal beliefs for each variable:
-        b_v(x_v) = U(v, x_v) + sum_{f in N(v)} r_{f -> v}(x_v)
-        """
-        for vname, var in self.graph.variables.items():
-            self.previous_beliefs[vname] = dict(self.beliefs[vname])
-            unary_factor = self.graph.factors.get(f"U_{vname}")
-
-            for val in var.domain:
-                u_val = unary_factor.evaluate({vname: val}) if unary_factor else 0.0
-                if math.isinf(u_val) and u_val < 0:
-                    u_val = -1e6
-
-                incoming_r = sum(
-                    self.r_messages.get((fname, vname), {}).get(val, 0.0)
-                    for fname in var.neighbors
-                    if fname != f"U_{vname}"
+        # Log pruning results
+        for tj, cands in self.candidates.items():
+            pruned = set(self.robot_ids) - cands
+            if pruned:
+                self._log(
+                    f'[THOP] Task {tj}: pruned {sorted(pruned)}, '
+                    f'kept {sorted(cands)}'
                 )
-                self.beliefs[vname][val] = u_val + incoming_r
 
-            # Normalize beliefs for numerical stability and convergence checking
-            b_vals = list(self.beliefs[vname].values())
-            if b_vals:
-                mean_b = sum(b_vals) / len(b_vals)
-                for k in self.beliefs[vname]:
-                    self.beliefs[vname][k] -= mean_b
+    def _init_messages(self) -> None:
+        """Initialise all q and r messages to 0."""
+        for rid in self.robot_ids:
+            self.q[rid] = {tj: 0.0 for tj in self.task_ids}
+            self.beliefs[rid] = {tj: 0.0 for tj in self.task_ids}
+        for tj in self.task_ids:
+            self.r[tj] = {rid: 0.0 for rid in self.robot_ids}
 
-            # Determine best assignment: x_v* = argmax b_v(x)
-            best_val = 'none'
-            best_score = float('-inf')
-            for val in sorted(var.domain, key=lambda x: (x == 'none', x)):
-                score = self.beliefs[vname][val]
-                if score > best_score:
-                    best_score = score
-                    best_val = val
+        self.assignment = {tj: '' for tj in self.task_ids}
+        self.prev_assignment = {tj: '' for tj in self.task_ids}
 
-            # Record previous assignment before updating
-            self.previous_assignment[vname] = self.current_assignment.get(vname, 'none')
-            self.current_assignment[vname] = best_val
+    # -----------------------------------------------------------------------
+    # Binary Max-Sum Update Rules
+    # -----------------------------------------------------------------------
 
-    def check_convergence(self) -> Tuple[bool, float]:
+    def _update_r(self) -> float:
         """
-        Evaluates max belief delta: max_{v, d} |b_v^{(t)}(d) - b_v^{(t-1)}(d)|.
-        Returns (has_converged, max_delta).
+        Factor → Variable update (opportunity cost message).
+
+        r_{j→i} = max_{k ∈ C[j], k ≠ i} (U[k][j] + q[k][j])
+
+        This is the "best competing bid" for task j, excluding robot i.
+        Damped: r_new = (1-γ)*r_computed + γ*r_old
+        Returns max |Δr|.
         """
+        gamma = self.config.damping_factor
         max_delta = 0.0
-        for vname, cur_b in self.beliefs.items():
-            prev_b = self.previous_beliefs.get(vname, {})
-            for val, cur_val in cur_b.items():
-                prev_val = prev_b.get(val, 0.0)
-                delta = abs(cur_val - prev_val)
+
+        for tj in self.task_ids:
+            cands = self.candidates[tj]
+            # Collect all bids for this task
+            bids = {
+                rid: self.U[rid][tj] + self.q[rid][tj]
+                for rid in cands
+            }
+
+            for rid in self.robot_ids:
+                # Best bid from OTHER candidates
+                competing_bids = [v for k, v in bids.items() if k != rid]
+                r_computed = max(competing_bids) if competing_bids else 0.0
+
+                r_old = self.r[tj][rid]
+                r_new = (1.0 - gamma) * r_computed + gamma * r_old
+                delta = abs(r_new - r_old)
                 if delta > max_delta:
                     max_delta = delta
+                self.r[tj][rid] = r_new
 
-        converged = max_delta < self.config.convergence_threshold
-        return converged, max_delta
+        return max_delta
 
-    def run(self) -> Dict[str, Any]:
+    def _update_q(self) -> float:
         """
-        Executes the Max-Sum message-passing iterations until convergence or max_iterations.
-        Returns detailed summary and task ownership assignments.
+        Variable → Factor update (net preference message).
+
+        q_{i→j} = U[i][j] - max_{j' ≠ j} max(0, net_gain(i, j'))
+        where net_gain(i, j') = U[i][j'] + r[j'][i]
+
+        Intuition: robot i's preference for task j, accounting for the
+        opportunity cost of giving up its best alternative task.
+        Damped: q_new = (1-γ)*q_computed + γ*q_old
+        Returns max |Δq|.
         """
-        self._log("\n" + "═" * 78)
-        self._log("  MAX-SUM MESSAGE PASSING ALGORITHM EXECUTION")
-        self._log(f"  Max Iterations: {self.config.max_iterations} | Convergence Threshold: {self.config.convergence_threshold}")
-        self._log("═" * 78)
+        gamma = self.config.damping_factor
+        max_delta = 0.0
+
+        for rid in self.robot_ids:
+            # Net gain for each task this robot is a candidate for
+            net_gains = {}
+            for tj in self.task_ids:
+                if rid in self.candidates[tj]:
+                    net_gains[tj] = self.U[rid][tj] + self.r[tj][rid]
+
+            for tj in self.task_ids:
+                if rid not in self.candidates.get(tj, set()):
+                    # Not a candidate: pin q to a large negative
+                    self.q[rid][tj] = -1e6
+                    continue
+
+                # Best alternative net gain (excluding task j)
+                alt_gains = [g for t2, g in net_gains.items() if t2 != tj]
+                best_alt = max(alt_gains) if alt_gains else 0.0
+                best_alt = max(0.0, best_alt)  # Idle is always an option
+
+                q_computed = self.U[rid][tj] - best_alt
+                q_old = self.q[rid][tj]
+                q_new = (1.0 - gamma) * q_computed + gamma * q_old
+                delta = abs(q_new - q_old)
+                if delta > max_delta:
+                    max_delta = delta
+                self.q[rid][tj] = q_new
+
+        return max_delta
+
+    def _update_beliefs(self) -> None:
+        """
+        Marginal belief: b[i][j] = U[i][j] - r[j][i]
+
+        ``r[j][i]`` is the best competing utility/opportunity cost for task j.
+        It must be subtracted from robot i's local utility.  Adding it is
+        incorrect for the negative-cost utility convention and can make a
+        farther robot beat the best candidate after damping.
+        """
+        for rid in self.robot_ids:
+            for tj in self.task_ids:
+                self.beliefs[rid][tj] = self.U[rid][tj] - self.r[tj][rid]
+
+    def _extract_assignment(self) -> Dict[str, str]:
+        """
+        Maximum-utility, one-task-per-robot matching for a binary round.
+
+        Cardinality is maximized first so every feasible connected robot
+        receives work before a later sequential round fills bundles.  Ties are
+        resolved deterministically by the task/robot identifiers.
+        """
+        task_ids = sorted(self.task_ids)
+        robot_ids = sorted(self.robot_ids)
+        best_count = -1
+        best_score = float('-inf')
+        best_canonical: Tuple[Tuple[str, str], ...] = ()
+        best_assignment: Dict[str, str] = {}
+
+        def search(index: int, used: Set[str], assignment: Dict[str, str], score: float):
+            nonlocal best_count, best_score, best_canonical, best_assignment
+            if index == len(task_ids):
+                canonical = tuple(sorted(assignment.items()))
+                count = len(assignment)
+                if (count > best_count or
+                        (count == best_count and score > best_score) or
+                        (count == best_count and score == best_score and
+                         (not best_canonical or canonical < best_canonical))):
+                    best_count = count
+                    best_score = score
+                    best_canonical = canonical
+                    best_assignment = dict(assignment)
+                return
+
+            task_id = task_ids[index]
+            # Leave a task for a later sequential allocation round.
+            search(index + 1, used, assignment, score)
+            for robot_id in robot_ids:
+                if robot_id in used or robot_id not in self.candidates.get(task_id, set()):
+                    continue
+                assignment[task_id] = robot_id
+                used.add(robot_id)
+                search(index + 1, used, assignment, score + self.U[robot_id][task_id])
+                used.remove(robot_id)
+                del assignment[task_id]
+
+        search(0, set(), {}, 0.0)
+        return best_assignment
+
+    # -----------------------------------------------------------------------
+    # Main Solve Loop
+    # -----------------------------------------------------------------------
+
+    def run(self) -> Dict:
+        """
+        Execute Damped Binary Max-Sum until convergence or iteration cap.
+
+        Returns dict with:
+          'converged'         : bool
+          'iterations_run'    : int
+          'ownership'         : {task_id: robot_id}
+          'robot_assignments' : {robot_id: task_id | 'none'}
+          'final_beliefs'     : {robot_id: {task_id: float}}
+        """
+        self._log('\n' + '═' * 78)
+        self._log('  DAMPED BINARY MAX-SUM — TASK ALLOCATION')
+        self._log(
+            f'  Robots: {self.robot_ids} | Tasks: {self.task_ids} | '
+            f'γ={self.config.damping_factor} | MaxIter={self.config.max_iterations} | '
+            f'ε={self.config.convergence_threshold}'
+        )
+        self._log('═' * 78)
 
         converged = False
-        consecutive_stable = 0
-        final_iteration = 0
+        stable_count = 0
+        final_iter = 0
 
         for iteration in range(1, self.config.max_iterations + 1):
-            final_iteration = iteration
+            final_iter = iteration
+            self.prev_assignment = dict(self.assignment)
 
-            # -------------------------------------------------------------
-            # Step 1: Variable -> Factor Messages (q_{v -> f})
-            # -------------------------------------------------------------
-            new_q: Dict[Tuple[str, str], Dict[str, float]] = {}
-            for vname, var in self.graph.variables.items():
-                for fname in var.neighbors:
-                    q_val = self.compute_variable_to_factor(vname, fname)
-                    new_q[(vname, fname)] = q_val
+            # --- Step 1: r update (factor → variable) ---
+            delta_r = self._update_r()
 
-            self.q_messages.update(new_q)
+            # --- Step 2: q update (variable → factor) ---
+            delta_q = self._update_q()
 
-            # -------------------------------------------------------------
-            # Step 2: Factor -> Variable Messages (r_{f -> v})
-            # -------------------------------------------------------------
-            new_r: Dict[Tuple[str, str], Dict[str, float]] = {}
-            for fname, factor in self.graph.factors.items():
-                for vname in factor.neighbors:
-                    r_val = self.compute_factor_to_variable(fname, vname)
-                    new_r[(fname, vname)] = r_val
+            # --- Step 3: Belief update ---
+            self._update_beliefs()
 
-            self.r_messages.update(new_r)
+            # --- Step 4: Extract assignment ---
+            self.assignment = self._extract_assignment()
 
-            # -------------------------------------------------------------
-            # Step 3: Update Beliefs & Select Current Assignment
-            # -------------------------------------------------------------
-            self.update_beliefs()
+            max_delta = max(delta_r, delta_q)
 
-            # -------------------------------------------------------------
-            # Step 4: Check Convergence
-            # -------------------------------------------------------------
-            is_conv, delta = self.check_convergence()
+            # --- Step 5: Convergence check ---
+            assignments_stable = (self.assignment == self.prev_assignment)
+            belief_converged = (max_delta < self.config.convergence_threshold)
 
-            # Log this iteration
-            self._log(f"\n[ITERATION {iteration:02d}] Max Belief Delta: {delta:.6f}")
-            for vname in sorted(self.graph.variables):
-                assigned = self.current_assignment[vname]
-                belief_val = self.beliefs[vname][assigned]
-                # Log top candidate domain utilities
-                dom_summary = ", ".join(
-                    f"{d}:{self.beliefs[vname][d]:.2f}"
-                    for d in sorted(self.graph.variables[vname].domain)
+            self._log(
+                f'\n[ITER {iteration:02d}] max_delta={max_delta:.5f} | '
+                f'belief_conv={belief_converged} | stable={assignments_stable}'
+            )
+            for tj in sorted(self.task_ids):
+                winner = self.assignment.get(tj, '')
+                bel = self.beliefs.get(winner, {}).get(tj, float('nan')) if winner else float('nan')
+                cand_str = ', '.join(
+                    f'{rid}:{self.beliefs[rid][tj]:.2f}'
+                    for rid in sorted(self.candidates.get(tj, set()))
                 )
-                self._log(f"  • {vname:7s} -> Selected: {assigned:5s} | Belief={belief_val:8.3f} | [{dom_summary}]")
-
-                # Store audit log record
+                self._log(
+                    f'  Task {tj}: winner={winner or "none"} '
+                    f'belief={bel:.3f} | [{cand_str}]'
+                )
                 self.iteration_logs.append(MaxSumIterationLog(
                     iteration=iteration,
-                    sender=vname,
-                    receiver="FactorGraph",
-                    message_type="BELIEF_UPDATE",
-                    task_id=assigned,
-                    utility_value=belief_val,
-                    current_belief=belief_val,
-                    current_selected_owner=f"{assigned} -> {vname}" if assigned != 'none' else "none"
+                    sender='MaxSumEngine',
+                    receiver=winner or 'none',
+                    message_type='BINARY_BELIEF',
+                    task_id=tj,
+                    utility_value=self.U.get(winner, {}).get(tj, float('nan')) if winner else float('nan'),
+                    current_belief=bel,
+                    current_selected_owner=winner or 'none',
                 ))
 
-            assignments_stable = (
-                bool(self.previous_assignment) and
-                all(self.current_assignment.get(k) == self.previous_assignment.get(k) for k in self.graph.variables)
-            )
-
-            if is_conv or (assignments_stable and iteration >= 3):
-                consecutive_stable += 1
-                if consecutive_stable >= self.config.stable_iterations_required:
+            if belief_converged or assignments_stable:
+                stable_count += 1
+                if stable_count >= self.config.stable_iterations_required:
+                    reason = (
+                        f'Δ={max_delta:.5f} < ε={self.config.convergence_threshold}'
+                        if belief_converged else 'assignments stabilised'
+                    )
+                    self._log(f'\n✓ Converged after {iteration} iterations ({reason})')
                     converged = True
-                    reason = f"belief delta = {delta:.6f} < {self.config.convergence_threshold}" if is_conv else "decision assignments stabilized"
-                    self._log(f"\n✓ Converged after {iteration} iterations ({reason})")
                     break
             else:
-                consecutive_stable = 0
+                stable_count = 0
 
-        # Iteration limit fallback if not converged
         if not converged:
-            self._log(f"\n! Iteration limit of {self.config.max_iterations} reached. Falling back to current best beliefs.")
+            self._log(
+                f'\n! Hit iteration limit ({self.config.max_iterations}). '
+                f'Using best current assignment.'
+            )
 
-        # Extract final task ownership
-        # Map: task_id -> winning robot_id
-        ownership: Dict[str, str] = {}
-        for vname, assigned_task in self.current_assignment.items():
-            if assigned_task != 'none':
-                ownership[assigned_task] = vname
+        # Build robot_assignments (robot_id → task_id | 'none')
+        robot_assignments = {rid: 'none' for rid in self.robot_ids}
+        for tj, rid in self.assignment.items():
+            robot_assignments[rid] = tj
+
+        self._log('\n  FINAL ASSIGNMENT:')
+        for tj in sorted(self.task_ids):
+            owner = self.assignment.get(tj, '')
+            self._log(f'    {tj} ──► {owner or "UNASSIGNED"}')
+        self._log('═' * 78 + '\n')
 
         return {
             'converged': converged,
-            'iterations_run': final_iteration,
-            'ownership': ownership,
-            'robot_assignments': dict(self.current_assignment),
-            'final_beliefs': {v: dict(b) for v, b in self.beliefs.items()},
-            'total_utility': self.graph.evaluate_joint(self.current_assignment),
+            'iterations_run': final_iter,
+            'ownership': dict(self.assignment),
+            'robot_assignments': robot_assignments,
+            'final_beliefs': {rid: dict(self.beliefs[rid]) for rid in self.robot_ids},
+            'utilities': {rid: dict(self.U[rid]) for rid in self.robot_ids},
+            'candidates': {tid: sorted(candidates) for tid, candidates in self.candidates.items()},
         }
 
 
 # ---------------------------------------------------------------------------
-# Sequential Multi-Task Max-Sum Allocator
+# Multi-Round Allocation (called by MaxSumAllocator)
 # ---------------------------------------------------------------------------
 
 def run_multi_round_maxsum_allocation(
@@ -390,26 +479,28 @@ def run_multi_round_maxsum_allocation(
     tasks: List[TaskInfo],
     weights: Optional[UtilityWeights] = None,
     config: Optional[MaxSumConfig] = None,
-    log_callback: Optional[Callable[[str], None]] = None
+    log_callback: Optional[Callable[[str], None]] = None,
+    incumbents: Optional[Dict[str, str]] = None,
+    round_callback: Optional[Callable[[Dict], None]] = None,
 ) -> Dict[str, str]:
     """
-    Allocates ALL tasks across the fleet using sequential Max-Sum rounds:
-    - In each round, robots bid on unallocated tasks.
-    - Assigned tasks are claimed and removed from the candidate pool.
-    - Robot workloads L are incremented and positions updated for subsequent rounds.
-    - Continues until all tasks are owned or no more tasks can be feasibly taken.
+    Allocates all tasks using sequential Damped Binary Max-Sum rounds.
 
-    Returns task ownership mapping:
-    {'T1': 'robot1', 'T2': 'robot2', 'T3': 'robot3', 'T4': 'robot1', 'T5': 'robot3'}
+    Each round runs one full solver instance on unallocated tasks.
+    Assigned tasks are removed from the pool; robot virtual positions and
+    workloads are advanced for the next round.
+
+    Returns task ownership: {task_id: robot_id}
     """
     logger = log_callback or print
     cfg = config or MaxSumConfig()
+    w = weights or UtilityWeights()
 
-    final_task_ownership: Dict[str, str] = {}
-    unassigned_task_ids = set(t.task_id for t in tasks)
-    task_map = {t.task_id: t for t in tasks}
+    final_ownership: Dict[str, str] = {}
+    unassigned: Set[str] = {t.task_id for t in tasks}
+    task_map: Dict[str, TaskInfo] = {t.task_id: t for t in tasks}
 
-    # Deep-copy robot states to track virtual workload throughout allocation
+    # Deep-copy robot states to track virtual progress
     active_robots = [
         RobotInfo(
             robot_id=r.robot_id,
@@ -424,56 +515,74 @@ def run_multi_round_maxsum_allocation(
     ]
 
     round_idx = 1
-    logger("\n" + "█" * 78)
-    logger(f"  STARTING MULTI-ROUND MAX-SUM ALLOCATION ({len(tasks)} tasks, {len(robots)} robots)")
-    logger("█" * 78)
+    logger('\n' + '█' * 78)
+    logger(
+        f'  MULTI-ROUND DAMPED BINARY MAX-SUM '
+        f'({len(tasks)} tasks, {len(robots)} robots)'
+    )
+    logger('█' * 78)
 
-    while unassigned_task_ids and round_idx <= len(tasks):
-        logger(f"\n{'═' * 30} ROUND {round_idx} {'═' * 30}")
-        logger(f"Unassigned Tasks: {sorted(unassigned_task_ids)}")
+    while unassigned and round_idx <= len(tasks):
+        logger(f"\n{'═' * 28} ROUND {round_idx} {'═' * 28}")
+        logger(f'  Unassigned: {sorted(unassigned)}')
 
-        # Build candidate task list for this round
-        candidate_tasks = [task_map[tid] for tid in unassigned_task_ids]
+        candidate_tasks = [task_map[tid] for tid in unassigned]
 
-        # Build factor graph for current round
-        round_graph = build_task_allocation_factor_graph(active_robots, candidate_tasks, weights)
-
-        # Run Max-Sum solver
-        solver = MaxSumSolver(round_graph, cfg, log_callback=logger)
+        solver = MaxSumSolver(
+            robots=active_robots,
+            tasks=candidate_tasks,
+            weights=w,
+            config=cfg,
+            log_callback=logger,
+            incumbents=incumbents,
+        )
         result = solver.run()
+        if round_callback:
+            round_callback({
+                'round': round_idx,
+                'candidate_tasks': sorted(unassigned),
+                'ownership': dict(result['ownership']),
+                'iterations': result['iterations_run'],
+                'converged': result['converged'],
+                'utilities': result['utilities'],
+                'beliefs': result['final_beliefs'],
+            })
 
-        round_assignments = result['robot_assignments']
-        allocated_in_this_round = 0
+        allocated_this_round = 0
+        for tj, owner in result['ownership'].items():
+            if tj in unassigned and owner:
+                final_ownership[tj] = owner
+                unassigned.discard(tj)
+                allocated_this_round += 1
 
-        for r_name, chosen_task in round_assignments.items():
-            if chosen_task != 'none' and chosen_task in unassigned_task_ids:
-                final_task_ownership[chosen_task] = r_name
-                unassigned_task_ids.remove(chosen_task)
-                allocated_in_this_round += 1
-
-                # Update virtual robot state for next round (workload + end location at delivery)
+                # Advance virtual robot state
                 for r in active_robots:
-                    if r.robot_id == r_name:
+                    if r.robot_id == owner:
                         r.current_workload += 1
-                        t_obj = task_map[chosen_task]
+                        t_obj = task_map[tj]
+                        # Simple battery decay
+                        d = (
+                            math.hypot(t_obj.pickup_x - r.x, t_obj.pickup_y - r.y)
+                            + math.hypot(
+                                t_obj.delivery_x - t_obj.pickup_x,
+                                t_obj.delivery_y - t_obj.pickup_y,
+                            )
+                        )
+                        r.battery_level = max(0.0, r.battery_level - (d / 20.0) * 5.0)
                         r.x = t_obj.delivery_x
                         r.y = t_obj.delivery_y
-                        # Account for battery consumption
-                        d = math.hypot(t_obj.pickup_x - r.x, t_obj.pickup_y - r.y) + \
-                            math.hypot(t_obj.delivery_x - t_obj.pickup_x, t_obj.delivery_y - t_obj.pickup_y)
-                        r.battery_level = max(0.0, r.battery_level - (d / 20.0) * 5.0)
+                        break
 
-        logger(f"Round {round_idx} allocated: {allocated_in_this_round} tasks.")
-        if allocated_in_this_round == 0:
-            logger("No further tasks could be allocated. Terminating rounds.")
+        logger(f'  Round {round_idx}: allocated {allocated_this_round} tasks.')
+        if allocated_this_round == 0:
+            logger('  No progress — stopping early.')
             break
-
         round_idx += 1
 
-    logger("\n" + "█" * 78)
-    logger("  FINAL MAX-SUM TASK OWNERSHIP ALLOCATION:")
-    for tid in sorted(final_task_ownership):
-        logger(f"    {tid} ──► {final_task_ownership[tid]}")
-    logger("█" * 78 + "\n")
+    logger('\n' + '█' * 78)
+    logger('  FINAL TASK OWNERSHIP:')
+    for tid in sorted(final_ownership):
+        logger(f'    {tid} ──► {final_ownership[tid]}')
+    logger('█' * 78 + '\n')
 
-    return final_task_ownership
+    return final_ownership

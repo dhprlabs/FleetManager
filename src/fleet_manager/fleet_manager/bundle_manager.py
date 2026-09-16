@@ -23,6 +23,7 @@ Dynamically updates when:
 """
 
 import itertools
+import json
 import math
 import time
 from typing import Dict, List, Optional, Set, Tuple
@@ -34,12 +35,16 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from fleet_interfaces.msg import (
     Bundle,
+    P2PMessage,
+    PickupObservation,
     RobotState,
     Task,
     TaskOwnership,
     TaskPool,
     WorldView,
 )
+from fleet_manager.audit_log import audit_event
+from fleet_manager.p2p_client import P2PClient
 
 
 def compute_route_cost(
@@ -180,9 +185,6 @@ class BundleManager(Node):
         self.ownership_sub = self.create_subscription(
             TaskOwnership, 'task_ownership', self._handle_ownership, 10
         )
-        self.fleet_ownership_sub = self.create_subscription(
-            TaskOwnership, '/fleet/task_ownership', self._handle_ownership, 10
-        )
         self.world_view_sub = self.create_subscription(
             WorldView, 'world_view', self._handle_world_view, 10
         )
@@ -193,8 +195,13 @@ class BundleManager(Node):
             PoseWithCovarianceStamped, 'amcl_pose', self._handle_amcl_pose, 10
         )
         self.task_events_sub = self.create_subscription(
-            Task, '/fleet/task_events', self._handle_task_event, 10
+            Task, 'task_events', self._handle_task_event, 10
         )
+        # `/fleet/*` topics are observable globally in the simulator.  They
+        # must not bypass a radio-range partition to change task ownership.
+        self.p2p = P2PClient(node=self)
+        self.p2p.register_handler('TASK_OWNERSHIP', self._on_p2p_task_ownership)
+        self.p2p.register_handler('PICKUP_OBSERVATION', self._on_p2p_pickup_observation)
 
         latching_qos = QoSProfile(
             depth=10,
@@ -236,6 +243,54 @@ class BundleManager(Node):
         for t in msg.tasks:
             self._store_task_detail(t)
 
+    def _handle_pickup_observation(self, obs: PickupObservation):
+        """Reacts to fleet pickup observations confirming other robots' ownership/completion."""
+        if obs.is_valid and obs.confirmed_owner_id and obs.confirmed_owner_id != self.robot_id:
+            if obs.task_id in self.owned_tasks or obs.task_id == self.current_task or obs.task_id in self.remaining_tasks:
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [BUNDLE] Pickup observation confirmed task {obs.task_id} '
+                    f'owned by {obs.confirmed_owner_id}. Invalidating local ownership.'
+                )
+                self._audit('bundle_task_invalidated', task_id=obs.task_id,
+                            reason='pickup_confirmed_by_other_robot',
+                            confirmed_owner=obs.confirmed_owner_id, level='warn')
+                self.handle_task_invalidated(obs.task_id)
+
+    def _on_p2p_task_ownership(self, msg: P2PMessage):
+        """Apply ownership received only from the reachable P2P transport."""
+        try:
+            payload = json.loads(msg.payload)
+            ownership = TaskOwnership()
+            ownership.task_id = payload['task_id']
+            ownership.robot_id = payload['robot_id']
+            ownership.status = int(payload['status'])
+        except (TypeError, ValueError, KeyError) as error:
+            self.get_logger().warn(
+                f'[{self.robot_id}] [BUNDLE] Ignoring malformed TASK_OWNERSHIP: {error}'
+            )
+            return
+        self._handle_ownership(ownership)
+
+    def _on_p2p_pickup_observation(self, msg: P2PMessage):
+        """Accept pickup evidence only when it arrives over reachable P2P."""
+        try:
+            payload = json.loads(msg.payload)
+            observation = PickupObservation()
+            observation.task_id = payload['task_id']
+            observation.robot_id = payload.get('robot_id', msg.source_robot_id)
+            observation.is_valid = bool(payload.get('is_valid', False))
+            observation.confirmed_owner_id = payload.get('confirmed_owner_id', '')
+        except (TypeError, ValueError, KeyError) as error:
+            self.get_logger().warn(
+                f'[{self.robot_id}] [BUNDLE] Ignoring malformed PICKUP_OBSERVATION: {error}'
+            )
+            return
+        self._handle_pickup_observation(observation)
+
+    def _audit(self, event: str, level: str = 'info', **details):
+        audit_event(self.get_logger(), 'bundle_manager', event, self.robot_id,
+                    level=level, **details)
+
     def _handle_world_view(self, msg: WorldView):
         # Update live pose
         self.current_x = msg.own_state.current_pose.pose.position.x
@@ -248,9 +303,20 @@ class BundleManager(Node):
                 'dropoff': (t.dropoff_pose.pose.position.x, t.dropoff_pose.pose.position.y),
                 'priority': t.priority,
                 'state': t.state,
+                'assigned_robot_id': t.assigned_robot_id,
             }
-            if t.state == Task.STATE_COMPLETED and t.task_id in self.owned_tasks:
-                self.handle_task_completed(t.task_id)
+            # If task in our bundle is already completed or in progress by another robot in CRDT
+            if t.task_id in self.owned_tasks or t.task_id == self.current_task or t.task_id in self.remaining_tasks:
+                if t.state in (Task.STATE_COMPLETED, Task.STATE_DELIVERING, Task.STATE_PICKUP_COMPLETED):
+                    if t.assigned_robot_id and t.assigned_robot_id != self.robot_id:
+                        self.get_logger().warn(
+                            f'[{self.robot_id}] [BUNDLE] Stale task {t.task_id} detected: already in state {t.state} '
+                            f'by robot {t.assigned_robot_id}. Invalidating local ownership.'
+                        )
+                        self.handle_task_invalidated(t.task_id)
+                        continue
+                if t.state == Task.STATE_COMPLETED:
+                    self.handle_task_completed(t.task_id)
 
     def _store_task_detail(self, t: Task):
         self.task_details[t.task_id] = {
@@ -258,6 +324,7 @@ class BundleManager(Node):
             'dropoff': (t.dropoff_pose.pose.position.x, t.dropoff_pose.pose.position.y),
             'priority': t.priority,
             'state': t.state,
+            'assigned_robot_id': t.assigned_robot_id,
         }
 
     def _handle_ownership(self, msg: TaskOwnership):
@@ -265,7 +332,21 @@ class BundleManager(Node):
         if msg.robot_id == self.robot_id:
             if msg.status in (TaskOwnership.STATUS_CLAIMED, TaskOwnership.STATUS_CONFIRMED):
                 if msg.task_id not in self.owned_tasks and msg.task_id not in self.completed_tasks:
+                    # GUARD: check if already completed or delivering by another robot in CRDT state
+                    details = self.task_details.get(msg.task_id)
+                    if details:
+                        st = details.get('state')
+                        assigned = details.get('assigned_robot_id')
+                        if st in (Task.STATE_COMPLETED, Task.STATE_DELIVERING, Task.STATE_PICKUP_COMPLETED) and assigned != self.robot_id:
+                            self.get_logger().warn(
+                                f'[{self.robot_id}] [BUNDLE] Ignoring claim for {msg.task_id} — '
+                                f'already state={st} by {assigned}.'
+                            )
+                            return
                     self.owned_tasks.add(msg.task_id)
+                    self._audit('ownership_accepted', task_id=msg.task_id,
+                                ownership_status=msg.status,
+                                owned_tasks=sorted(self.owned_tasks))
                     self.get_logger().info(
                         f'[{self.robot_id}] Ownership received for {msg.task_id}. Re-ordering bundle...'
                     )
@@ -278,12 +359,45 @@ class BundleManager(Node):
                     if msg.task_id in self.remaining_tasks:
                         self.remaining_tasks.remove(msg.task_id)
                     self.recompute_bundle()
+                    self._audit('ownership_released', task_id=msg.task_id,
+                                owned_tasks=sorted(self.owned_tasks))
+        elif msg.status in (TaskOwnership.STATUS_CLAIMED, TaskOwnership.STATUS_CONFIRMED):
+            # A late-join solve may transfer an unstarted task from this queue
+            # to a closer synchronized peer.  Remove our stale copy when the
+            # winning claim reaches us; pickup/execution work is never moved.
+            details = self.task_details.get(msg.task_id, {})
+            if (msg.task_id in self.owned_tasks and
+                    details.get('state') in (Task.STATE_AVAILABLE, Task.STATE_BLOCKED, Task.STATE_ALLOCATED)):
+                self._audit('bundle_task_transferred', task_id=msg.task_id,
+                            new_owner=msg.robot_id)
+                self.handle_task_invalidated(msg.task_id)
 
     def _handle_task_event(self, task: Task):
         """Watches for task completions."""
         self._store_task_detail(task)
-        if task.state == Task.STATE_COMPLETED and task.task_id in self.owned_tasks:
-            self.handle_task_completed(task.task_id)
+        if task.state == Task.STATE_COMPLETED:
+            if task.task_id in self.owned_tasks or task.task_id == self.current_task or task.task_id in self.remaining_tasks:
+                self.handle_task_completed(task.task_id)
+
+    def handle_task_invalidated(self, task_id: str):
+        """Called when a task is invalidated because another robot completed or owns it."""
+        if task_id not in self.owned_tasks and task_id not in self.remaining_tasks and self.current_task != task_id:
+            return
+
+        self.get_logger().warn(
+            f'[{self.robot_id}] [BUNDLE] Task {task_id} invalidated — removed from bundle.'
+        )
+        self.owned_tasks.discard(task_id)
+        self._audit('bundle_task_invalidated', task_id=task_id,
+                    reason='distributed_state_conflict', level='warn')
+
+        if self.current_task == task_id:
+            self.current_task = ""
+
+        if task_id in self.remaining_tasks:
+            self.remaining_tasks.remove(task_id)
+
+        self.recompute_bundle()
 
     def handle_task_completed(self, task_id: str):
         """Called when Task Execution Manager marks a task completed."""
@@ -292,6 +406,8 @@ class BundleManager(Node):
 
         self.get_logger().info(f'[{self.robot_id}] Task {task_id} COMPLETED. Advancing bundle queue...')
         self.completed_tasks.add(task_id)
+        self._audit('bundle_task_completed', task_id=task_id,
+                    completed_tasks=sorted(self.completed_tasks))
         self.owned_tasks.discard(task_id)
 
         if self.current_task == task_id:
@@ -371,6 +487,10 @@ class BundleManager(Node):
             f'remaining={self.remaining_tasks} | '
             f'Total Dist: {total_dist:.2f}m, Est Time: {total_time:.1f}s'
         )
+        self._audit('bundle_recomputed', current_task=self.current_task,
+                    remaining_tasks=self.remaining_tasks, owned_tasks=sorted(self.owned_tasks),
+                    route_distance_m=round(total_dist, 3), estimated_time_s=round(total_time, 3),
+                    optimization='exact_permutation' if len(unstarted) <= 7 else 'cheapest_insertion')
         self.publish_bundle()
 
     def publish_bundle(self):

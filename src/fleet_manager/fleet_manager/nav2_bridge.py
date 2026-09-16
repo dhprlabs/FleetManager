@@ -22,10 +22,11 @@ Responsibilities:
   7. (Phase 9) Physical pickup validation via Gazebo GetEntityState.
 """
 
+import json
 import math
 import time
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, Optional, Set, Tuple
 
 import rclpy
 from rclpy.action import ActionClient
@@ -37,7 +38,9 @@ from nav2_msgs.action import NavigateToPose
 
 from fleet_interfaces.msg import (
     Bundle,
+    P2PMessage,
     PickupObservation,
+    Reservation,
     RobotState,
     Task,
     TaskOwnership,
@@ -116,6 +119,7 @@ class TaskExecutionManager(Node):
         # Nav2 Action Client scoped to this robot's namespace
         self.nav_client = ActionClient(self, NavigateToPose, 'navigate_to_pose')
         self.current_goal_handle = None
+        self._goal_generation = 0
 
         # Gazebo GetEntityState service client (Phase 9)
         self._gazebo_entity_client = None
@@ -134,8 +138,18 @@ class TaskExecutionManager(Node):
                 )
                 self.enable_pickup_validation = False
 
+        # CRDT / Phase 11 tracking
+        self._seen_obs_ids: Set[str] = set()
+        self.lamport_clock: int = 0
+        self._world_view_task_states: Dict[str, Tuple[int, str]] = {}
+        self._transit_timer = None
+
         # P2P Client for task status broadcasting
         self.p2p = P2PClient(node=self)
+        try:
+            self.p2p.register_handler('PICKUP_OBSERVATION', self._on_p2p_pickup_obs)
+        except Exception:
+            pass
 
         # ── Subscriptions ──────────────────────────────────────────────────
         self.bundle_sub = self.create_subscription(
@@ -150,12 +164,6 @@ class TaskExecutionManager(Node):
         self.world_view_sub = self.create_subscription(
             WorldView, 'world_view', self._handle_world_view, 10
         )
-        # Listen for fleet pickup observations (Phase 9 reconciliation)
-        self.pickup_obs_sub = self.create_subscription(
-            PickupObservation, '/fleet/pickup_observations',
-            self._handle_pickup_observation, 10
-        )
-
         latching_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -169,14 +177,28 @@ class TaskExecutionManager(Node):
         )
 
         # ── Publishers ─────────────────────────────────────────────────────
-        self.task_event_pub = self.create_publisher(Task, '/fleet/task_events', 10)
+        self.task_event_pub = self.create_publisher(Task, 'task_events', 10)
+        self.fleet_task_event_pub = self.create_publisher(Task, '/fleet/task_events', 10)
         self.assigned_task_pub = self.create_publisher(Task, 'assigned_task', 10)
         self.pickup_obs_pub = self.create_publisher(
             PickupObservation, '/fleet/pickup_observations', 10
         )
-        self.ownership_release_pub = self.create_publisher(
-            TaskOwnership, '/fleet/task_ownership', 10
+        self.tasks_pickup_obs_pub = self.create_publisher(
+            PickupObservation, '/tasks/pickup_observation', 10
         )
+        # NOTE: no publisher to the global '/fleet/task_ownership' topic here.
+        # Ownership release is communicated via the P2P TASK_OWNERSHIP
+        # broadcast below, which is naturally gated by radio reachability;
+        # a global-topic publish would let out-of-range robots see this
+        # release with no connectivity basis for it (split-brain).
+
+        # Phase 12 traffic reservation interfaces
+        self.traffic_reserve_pub = self.create_publisher(Reservation, '/traffic/reserve', 10)
+        self.traffic_release_pub = self.create_publisher(Reservation, '/traffic/release', 10)
+        self.traffic_reserve_sub = self.create_subscription(
+            Reservation, '/traffic/reserve', self._handle_traffic_reserve_msg, 10
+        )
+        self._current_held_aisle: Optional[str] = None
 
         # Execution evaluation timer
         self.eval_timer = self.create_timer(0.5, self._eval_execution_step)
@@ -203,12 +225,34 @@ class TaskExecutionManager(Node):
     def _handle_world_view(self, msg: WorldView):
         self.current_x = msg.own_state.current_pose.pose.position.x
         self.current_y = msg.own_state.current_pose.pose.position.y
+        self.lamport_clock = max(self.lamport_clock, msg.lamport_clock)
         for t in msg.task_states:
             self.task_cache[t.task_id] = {
                 'pickup_pose': t.pickup_pose,
                 'dropoff_pose': t.dropoff_pose,
                 'priority': t.priority,
             }
+            self._world_view_task_states[t.task_id] = (t.state, t.assigned_robot_id)
+
+            # Check if active task was physically executed / completed by another robot in CRDT
+            if self.active_task_id and t.task_id == self.active_task_id:
+                if t.state in (Task.STATE_PICKUP_COMPLETED, Task.STATE_DELIVERING, Task.STATE_COMPLETED):
+                    if t.assigned_robot_id and t.assigned_robot_id != self.robot_id:
+                        self.get_logger().warn(
+                            f'[{self.robot_id}] [NAV2] Active task {self.active_task_id} confirmed {t.state} '
+                            f'by robot {t.assigned_robot_id} in CRDT world view. Aborting.'
+                        )
+                        self._abort_active_task(self.active_task_id, release_ownership=False)
+                elif (self.execution_state == TaskExecutionState.IN_PROGRESS and
+                      t.state == Task.STATE_ALLOCATED and
+                      t.assigned_robot_id and t.assigned_robot_id != self.robot_id):
+                    # A synchronized allocation may hand pre-pickup work to a
+                    # closer peer. Cancel without releasing the peer's claim.
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [NAV2] Pre-pickup handoff of {t.task_id} '
+                        f'to {t.assigned_robot_id}; cancelling local goal.'
+                    )
+                    self._abort_active_task(self.active_task_id, release_ownership=False)
 
     def _handle_task_pool(self, msg: TaskPool):
         # Ignore global DDS broadcast if robot is out of radio range of dock station
@@ -237,37 +281,71 @@ class TaskExecutionManager(Node):
         if msg.robot_id != self.robot_id:
             return
 
-        # GUARD: Never preempt an in-progress execution
+        # GUARD: If active task was invalidated from bundle, safely abort
         if self.execution_state != TaskExecutionState.IDLE:
+            if self.active_task_id and self.active_task_id not in msg.task_ids:
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [NAV2] Active task {self.active_task_id} no longer in bundle. Aborting.'
+                )
+                # Ownership was removed by a fleet handoff; publishing another
+                # AVAILABLE update here could overwrite the new owner's claim.
+                self._abort_active_task(self.active_task_id, release_ownership=False)
             return
 
         if msg.current_task:
             self._claim_and_start_task(msg.current_task)
 
+    def _on_p2p_pickup_obs(self, msg: P2PMessage):
+        """Handles PICKUP_OBSERVATION incoming over P2P virtual network."""
+        try:
+            d = json.loads(msg.payload)
+            obs = PickupObservation()
+            obs.obs_id = d.get('obs_id', '')
+            obs.robot_id = d.get('robot_id', msg.source_robot_id)
+            obs.task_id = d.get('task_id', '')
+            obs.is_valid = d.get('is_valid', False)
+            obs.item_present = d.get('item_present', False)
+            obs.failure_reason = d.get('failure_reason', '')
+            obs.confirmed_owner_id = d.get('confirmed_owner_id', '')
+            obs.lamport_clock = d.get('lamport_clock', 0)
+            self._handle_pickup_observation(obs)
+        except Exception as e:
+            self.get_logger().warn(f'[{self.robot_id}] [NAV2] Error parsing P2P PICKUP_OBSERVATION: {e}')
+
     def _handle_pickup_observation(self, obs: PickupObservation):
         """
-        Phase 9 — Fleet pickup observation received.
-        If another robot confirms ownership of our RECONCILING task, drop it.
+        Phase 9 & 11 — Fleet pickup observation received.
+        Deduplicates by obs_id.
+        If another robot confirms ownership/completion of our task, abort it.
         """
-        if self.execution_state != TaskExecutionState.RECONCILING:
-            return
-        if obs.task_id != self.active_task_id:
+        if obs.obs_id:
+            if obs.obs_id in self._seen_obs_ids:
+                return
+            self._seen_obs_ids.add(obs.obs_id)
+
+        # If another robot confirms ownership/completion of our active task
+        if obs.is_valid and obs.confirmed_owner_id and obs.confirmed_owner_id != self.robot_id:
+            if obs.task_id == self.active_task_id:
+                self.get_logger().info(
+                    f'[{self.robot_id}] [NAV2] ✓ Task {obs.task_id} confirmed owned by '
+                    f'{obs.confirmed_owner_id}. Aborting active execution.'
+                )
+                self._abort_active_task(obs.task_id, release_ownership=False)
             return
 
-        if obs.is_valid and obs.confirmed_owner_id and obs.confirmed_owner_id != self.robot_id:
-            # Another robot is confirmed owner — release our claim and go IDLE
-            self.get_logger().info(
-                f'[{self.robot_id}] ✓ Task {obs.task_id} confirmed owned by '
-                f'{obs.confirmed_owner_id}. Releasing and returning to IDLE.'
-            )
-            self._release_task_ownership(obs.task_id)
-        elif not obs.is_valid and obs.robot_id == self.robot_id:
-            # Our own observation came back unresolved — task is truly stale
-            self.get_logger().warn(
-                f'[{self.robot_id}] Task {obs.task_id} unresolved. '
-                f'Releasing and triggering re-bid.'
-            )
-            self._release_task_ownership(obs.task_id)
+        # If we are reconciling this task
+        if self.execution_state == TaskExecutionState.RECONCILING and obs.task_id == self.active_task_id:
+            if not obs.is_valid and (obs.failure_reason == 'no_confirmed_owner' or obs.robot_id == self.robot_id):
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [NAV2] Task {obs.task_id} unconfirmed by peers. '
+                    f'Marking completed by other entity.'
+                )
+                if self._reconcile_timer is not None:
+                    self._reconcile_timer.cancel()
+                    self._reconcile_timer.destroy()
+                    self._reconcile_timer = None
+                self._mark_task_completed_by_other(obs.task_id, 'other_entity')
+                self._abort_active_task(obs.task_id, release_ownership=False)
 
     # ──────────────────────────────────────────────────────────────────────────
     # State Machine Execution Logic
@@ -325,6 +403,10 @@ class TaskExecutionManager(Node):
         Arrived at pickup location.
         Phase 9: validate the physical item exists in Gazebo before proceeding.
         """
+        if self.execution_state != TaskExecutionState.IN_PROGRESS or not self.active_task_id:
+            return
+        self._goal_generation += 1
+        self.current_goal_handle = None
         if self.enable_pickup_validation and self._gazebo_entity_client is not None:
             self._validate_pickup_item()
         else:
@@ -372,19 +454,62 @@ class TaskExecutionManager(Node):
 
         if item_exists:
             self.get_logger().info(
-                f'[{self.robot_id}] ✓ Phase 9: Item confirmed present at pickup. Proceeding.'
+                f'[{self.robot_id}] ✓ Phase 11: Item confirmed present at pickup. Proceeding.'
             )
             self._confirm_pickup()
         else:
             self.get_logger().warn(
-                f'[{self.robot_id}] ✗ Phase 9: Item ABSENT at pickup for task '
-                f'{self.active_task_id}. Entering RECONCILING state.'
+                f'[{self.robot_id}] ✗ Phase 11: Item ABSENT at pickup for task '
+                f'{self.active_task_id}. Marked as COMPLETED by other entity.'
             )
-            self._enter_reconciling()
+            task_id = self.active_task_id
+            cached = self._world_view_task_states.get(task_id)
+            other_entity = 'other_entity'
+            if cached and cached[1] and cached[1] != self.robot_id:
+                other_entity = cached[1]
+
+            self.get_logger().info(
+                f'[{self.robot_id}] [PICKUP_VAL] Item absent at pickup: marking task '
+                f'{task_id} COMPLETED by entity "{other_entity}".'
+            )
+            self._mark_task_completed_by_other(task_id, other_entity)
+            self._abort_active_task(task_id, release_ownership=False)
 
     def _confirm_pickup(self):
         """Transitions IN_PROGRESS ──► PICKUP_COMPLETED."""
         self.execution_state = TaskExecutionState.PICKUP_COMPLETED
+        self.lamport_clock += 1
+        obs_id = f"{self.robot_id}:{self.lamport_clock}"
+        self._seen_obs_ids.add(obs_id)
+
+        # Publish observation: item confirmed physically present
+        obs = PickupObservation()
+        obs.obs_id = obs_id
+        obs.robot_id = self.robot_id
+        obs.task_id = self.active_task_id
+        obs.observed_pose = self.active_task_info['pickup_pose']
+        obs.is_valid = True
+        obs.item_present = True
+        obs.failure_reason = ''
+        obs.confirmed_owner_id = self.robot_id
+        obs.lamport_clock = int(self.lamport_clock)
+        obs.timestamp = self.get_clock().now().to_msg()
+        self.pickup_obs_pub.publish(obs)
+        self.tasks_pickup_obs_pub.publish(obs)
+
+        if self.p2p:
+            self.p2p.broadcast('PICKUP_OBSERVATION', payload={
+                'obs_id': obs_id,
+                'robot_id': self.robot_id,
+                'task_id': self.active_task_id,
+                'is_valid': True,
+                'item_present': True,
+                'failure_reason': '',
+                'confirmed_owner_id': self.robot_id,
+                'lamport_clock': int(self.lamport_clock),
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
+
         self.get_logger().info(
             f'[{self.robot_id}] ──► STATE: [PICKUP_COMPLETED] | '
             f'Arrived at pickup. Loading cargo (dwell {self.pickup_dwell_sec}s)...'
@@ -396,31 +521,42 @@ class TaskExecutionManager(Node):
 
     def _enter_reconciling(self):
         """
-        Phase 9 — Item not found at pickup.
-        Publish a PICKUP_OBSERVATION (is_valid=False) and wait for fleet resolution.
+        Phase 11 — Item not found at pickup.
+        Publish a PICKUP_OBSERVATION (is_valid=False, item_present=False) and wait for fleet resolution.
         """
         self.execution_state = TaskExecutionState.RECONCILING
         self._reconcile_start_time = time.monotonic()
+        self.lamport_clock += 1
+        obs_id = f"{self.robot_id}:{self.lamport_clock}"
+        self._seen_obs_ids.add(obs_id)
 
         # Publish observation: item absent
         obs = PickupObservation()
+        obs.obs_id = obs_id
         obs.robot_id = self.robot_id
         obs.task_id = self.active_task_id
         obs.observed_pose = self.active_task_info['pickup_pose']
         obs.is_valid = False
+        obs.item_present = False
         obs.failure_reason = 'item_absent_at_pickup'
         obs.confirmed_owner_id = ''
+        obs.lamport_clock = int(self.lamport_clock)
         obs.timestamp = self.get_clock().now().to_msg()
         self.pickup_obs_pub.publish(obs)
+        self.tasks_pickup_obs_pub.publish(obs)
 
         # Broadcast via P2P so other robots can respond
-        self.p2p.broadcast('PICKUP_OBSERVATION', payload={
-            'robot_id': self.robot_id,
-            'task_id': self.active_task_id,
-            'is_valid': False,
-            'failure_reason': 'item_absent_at_pickup',
-            'timestamp': self.get_clock().now().nanoseconds,
-        })
+        if self.p2p:
+            self.p2p.broadcast('PICKUP_OBSERVATION', payload={
+                'obs_id': obs_id,
+                'robot_id': self.robot_id,
+                'task_id': self.active_task_id,
+                'is_valid': False,
+                'item_present': False,
+                'failure_reason': 'item_absent_at_pickup',
+                'lamport_clock': int(self.lamport_clock),
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
 
         self.get_logger().warn(
             f'[{self.robot_id}] ──► STATE: [RECONCILING] | '
@@ -434,10 +570,74 @@ class TaskExecutionManager(Node):
             self._reconciliation_timeout
         )
 
+    def _mark_task_completed_by_other(self, task_id: str, other_entity: str = 'other_entity'):
+        """
+        Marks task completed by another robot or external entity when item is absent at pickup.
+        Does NOT release ownership for re-bid, but updates fleet, local state, and CRDT to STATE_COMPLETED.
+        """
+        self.get_logger().info(
+            f'[{self.robot_id}] Marking task {task_id} COMPLETED by entity "{other_entity}".'
+        )
+        self._world_view_task_states[task_id] = (Task.STATE_COMPLETED, other_entity)
+
+        info = self.active_task_info or self.task_cache.get(task_id, {})
+
+        # Publish task completed event locally and globally
+        t = Task()
+        t.task_id = task_id
+        t.assigned_robot_id = other_entity
+        t.state = Task.STATE_COMPLETED
+        t.priority = info.get('priority', 1) if info else 1
+        if info and 'pickup_pose' in info:
+            t.pickup_pose = info['pickup_pose']
+            t.dropoff_pose = info['dropoff_pose']
+
+        self.assigned_task_pub.publish(t)
+        self.task_event_pub.publish(t)
+        self.fleet_task_event_pub.publish(t)
+
+        # Broadcast via P2P
+        if self.p2p:
+            px = float(t.pickup_pose.pose.position.x) if (info and 'pickup_pose' in info) else 0.0
+            py = float(t.pickup_pose.pose.position.y) if (info and 'pickup_pose' in info) else 0.0
+            dx = float(t.dropoff_pose.pose.position.x) if (info and 'dropoff_pose' in info) else 0.0
+            dy = float(t.dropoff_pose.pose.position.y) if (info and 'dropoff_pose' in info) else 0.0
+            priority = int(t.priority)
+
+            self.p2p.broadcast('TASK_STATUS', payload={
+                'task_id': task_id,
+                'assigned_robot_id': other_entity,
+                'state': Task.STATE_COMPLETED,
+                'priority': priority,
+                'pickup_x': px,
+                'pickup_y': py,
+                'dropoff_x': dx,
+                'dropoff_y': dy,
+                'source_robot_id': self.robot_id,
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
+
+            # Broadcast valid pickup observation with confirmed owner so peers drop duplicate claims
+            self.lamport_clock += 1
+            obs_id = f"{self.robot_id}:{self.lamport_clock}"
+            self._seen_obs_ids.add(obs_id)
+            self.p2p.broadcast('PICKUP_OBSERVATION', payload={
+                'obs_id': obs_id,
+                'robot_id': self.robot_id,
+                'task_id': task_id,
+                'is_valid': True,
+                'item_present': False,
+                'failure_reason': 'completed_by_other',
+                'confirmed_owner_id': other_entity,
+                'lamport_clock': int(self.lamport_clock),
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
+
     def _reconciliation_timeout(self):
         """
-        Reconciliation timed out — no peer confirmed ownership.
-        Re-bid the task: mark as AVAILABLE in the fleet so Max-Sum can reallocate.
+        Reconciliation timed out.
+        Mark task as COMPLETED by other entity (since item was absent at pickup)
+        and abort without re-bid.
         """
         if self.execution_state != TaskExecutionState.RECONCILING:
             if self._reconcile_timer is not None:
@@ -446,23 +646,92 @@ class TaskExecutionManager(Node):
                 self._reconcile_timer = None
             return
 
-        self.get_logger().warn(
-            f'[{self.robot_id}] Reconciliation timeout for task {self.active_task_id}. '
-            f'No confirmed owner — releasing task for re-bid.'
-        )
-
         if self._reconcile_timer is not None:
             self._reconcile_timer.cancel()
             self._reconcile_timer.destroy()
             self._reconcile_timer = None
 
-        self._release_task_ownership(self.active_task_id)
+        cached = self._world_view_task_states.get(self.active_task_id)
+        other_entity = cached[1] if (cached and cached[1] and cached[1] != self.robot_id) else 'other_entity'
+
+        self.get_logger().warn(
+            f'[{self.robot_id}] Reconciliation timeout for task {self.active_task_id}. '
+            f'Item absent at pickup; marking COMPLETED by entity "{other_entity}".'
+        )
+        task_id = self.active_task_id
+        self._mark_task_completed_by_other(task_id, other_entity)
+        self._abort_active_task(task_id, release_ownership=False)
+
+    def _abort_active_task(self, task_id: Optional[str] = None, *, release_ownership: bool = True):
+        """
+        Phase 11 — Safely cancels active navigation, clears dwell and reconcile timers,
+        releases task ownership, and returns to IDLE.
+        """
+        tid = task_id or self.active_task_id
+        self.get_logger().warn(f'[{self.robot_id}] [NAV2] Aborting active task {tid}...')
+        self._goal_generation += 1
+
+        # 1. Cancel Nav2 action goal if running
+        if self.current_goal_handle is not None:
+            try:
+                self.current_goal_handle.cancel_goal_async()
+            except Exception as e:
+                self.get_logger().warn(f'[{self.robot_id}] Error cancelling goal: {e}')
+            self.current_goal_handle = None
+
+        # 2. Cancel simulated transit timer if running
+        if self._transit_timer is not None:
+            self._transit_timer.cancel()
+            self._transit_timer.destroy()
+            self._transit_timer = None
+
+        # 3. Cancel dwell and reconcile timers
+        if self._dwell_timer is not None:
+            self._dwell_timer.cancel()
+            self._dwell_timer.destroy()
+            self._dwell_timer = None
+        if self._reconcile_timer is not None:
+            self._reconcile_timer.cancel()
+            self._reconcile_timer.destroy()
+            self._reconcile_timer = None
+
+        # 4. Release aisle reservation if held
+        self._release_aisle_if_held()
+
+        # 5. Release task ownership if it was our active task
+        if tid and release_ownership:
+            self._release_task_ownership(tid)
+        else:
+            self.active_task_id = None
+            self.active_task_info = None
+            self.execution_state = TaskExecutionState.IDLE
+
+    def _handle_traffic_reserve_msg(self, msg: Reservation):
+        """Receives traffic reservation grants."""
+        if msg.robot_id == self.robot_id and msg.state == Reservation.STATE_GRANTED:
+            self._current_held_aisle = msg.segment_id
+
+    def _release_aisle_if_held(self):
+        """Releases physical single-lane aisle reservation if held."""
+        if self._current_held_aisle:
+            seg = self._current_held_aisle
+            self._current_held_aisle = None
+            res = Reservation()
+            res.reservation_id = f"{self.robot_id}:{seg}:release"
+            res.robot_id = self.robot_id
+            res.segment_id = seg
+            res.state = Reservation.STATE_RELEASED
+            self.traffic_release_pub.publish(res)
+            self.get_logger().info(f'[{self.robot_id}] [TRAFFIC] Released aisle reservation for {seg}.')
 
     def _release_task_ownership(self, task_id: str):
         """
         Releases ownership of a task and returns to IDLE.
         Publishes STATE_AVAILABLE so Max-Sum can re-bid the task.
+        Broadcasts both TASK_OWNERSHIP and TASK_STATUS via P2P so CRDT is updated.
         """
+        # Release aisle reservation if held
+        self._release_aisle_if_held()
         # Publish task as available again (re-bid signal)
         t = Task()
         t.task_id = task_id
@@ -474,21 +743,33 @@ class TaskExecutionManager(Node):
             t.dropoff_pose = self.active_task_info['dropoff_pose']
         self.task_event_pub.publish(t)
 
-        # Publish ownership release
-        rel = TaskOwnership()
-        rel.task_id = task_id
-        rel.robot_id = self.robot_id
-        rel.status = TaskOwnership.STATUS_RELEASED
-        rel.timestamp = self.get_clock().now().to_msg()
-        self.ownership_release_pub.publish(rel)
+        # Broadcast ownership release via P2P (reachability-gated)
+        if self.p2p:
+            self.p2p.broadcast('TASK_OWNERSHIP', payload={
+                'task_id': task_id,
+                'robot_id': self.robot_id,
+                'status': TaskOwnership.STATUS_RELEASED,
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
 
-        # Broadcast via P2P
-        self.p2p.broadcast('TASK_OWNERSHIP', payload={
-            'task_id': task_id,
-            'robot_id': self.robot_id,
-            'status': 'RELEASED',
-            'timestamp': self.get_clock().now().nanoseconds,
-        })
+            px = float(self.active_task_info['pickup_pose'].pose.position.x) if (self.active_task_info and 'pickup_pose' in self.active_task_info) else 0.0
+            py = float(self.active_task_info['pickup_pose'].pose.position.y) if (self.active_task_info and 'pickup_pose' in self.active_task_info) else 0.0
+            dx = float(self.active_task_info['dropoff_pose'].pose.position.x) if (self.active_task_info and 'dropoff_pose' in self.active_task_info) else 0.0
+            dy = float(self.active_task_info['dropoff_pose'].pose.position.y) if (self.active_task_info and 'dropoff_pose' in self.active_task_info) else 0.0
+            priority = int(self.active_task_info.get('priority', 1)) if self.active_task_info else 1
+
+            self.p2p.broadcast('TASK_STATUS', payload={
+                'task_id': task_id,
+                'assigned_robot_id': '',
+                'state': Task.STATE_AVAILABLE,
+                'priority': priority,
+                'pickup_x': px,
+                'pickup_y': py,
+                'dropoff_x': dx,
+                'dropoff_y': dy,
+                'source_robot_id': self.robot_id,
+                'timestamp': self.get_clock().now().nanoseconds,
+            })
 
         self.get_logger().info(
             f'[{self.robot_id}] Task {task_id} released. Returning to IDLE.'
@@ -528,6 +809,10 @@ class TaskExecutionManager(Node):
 
     def _on_delivery_arrival(self):
         """Transitions DELIVERING ──► COMPLETED: Verifies delivery & marks task complete."""
+        if self.execution_state != TaskExecutionState.DELIVERING or not self.active_task_id:
+            return
+        self._goal_generation += 1
+        self.current_goal_handle = None
         self.execution_state = TaskExecutionState.COMPLETED
         task_id = self.active_task_id
 
@@ -537,6 +822,9 @@ class TaskExecutionManager(Node):
             f'[{self.robot_id}] ══════════════════════════════════════════════════════'
         )
         self._publish_task_state(Task.STATE_COMPLETED)
+
+        # Release aisle reservation if held
+        self._release_aisle_if_held()
 
         # Reset active state and return to IDLE to pick next task from bundle
         self.active_task_id = None
@@ -551,11 +839,10 @@ class TaskExecutionManager(Node):
         """
         Dispatches navigation goal to Nav2 NavigateToPose action server.
         If Nav2 is offline / disabled (e.g. unit tests), gracefully simulates arrival.
-
-        BUG FIX: Previously used create_timer() which creates a REPEATING timer.
-        Now we store the timer handle and cancel+destroy it inside _simulated_arrival
-        before calling on_reached(), so it fires exactly once.
         """
+        task_id = self.active_task_id
+        self._goal_generation += 1
+        goal_generation = self._goal_generation
         if self.enable_nav2 and self.nav_client.wait_for_server(timeout_sec=0.5):
             goal_msg = NavigateToPose.Goal()
             goal_msg.pose = target_pose
@@ -567,26 +854,28 @@ class TaskExecutionManager(Node):
             )
             send_future = self.nav_client.send_goal_async(goal_msg)
             send_future.add_done_callback(
-                lambda f: self._on_goal_response(f, target_pose, on_reached)
+                lambda f: self._on_goal_response(
+                    f, target_pose, on_reached, task_id, goal_generation
+                )
             )
         else:
             # Simulated navigation transit (for headless testing or when Nav2 is offline)
             self.get_logger().info(
                 f'[{self.robot_id}] Nav2 not active. Simulating transit to {target_name}...'
             )
-            # Create a ONE-SHOT simulated transit timer.
-            # We store the handle so it can be cancelled inside the callback.
-            transit_timer_handle = []  # mutable container for the handle
 
             def _fire_once():
-                # Cancel and destroy the timer immediately — makes it one-shot
-                if transit_timer_handle:
-                    transit_timer_handle[0].cancel()
-                    transit_timer_handle[0].destroy()
-                self._simulated_arrival(target_pose, on_reached)
+                if self._transit_timer is not None:
+                    self._transit_timer.cancel()
+                    self._transit_timer.destroy()
+                    self._transit_timer = None
+                if self.active_task_id == task_id and self._goal_generation == goal_generation:
+                    self._simulated_arrival(target_pose, on_reached)
 
-            t = self.create_timer(1.0, _fire_once)
-            transit_timer_handle.append(t)
+            if self._transit_timer is not None:
+                self._transit_timer.cancel()
+                self._transit_timer.destroy()
+            self._transit_timer = self.create_timer(1.0, _fire_once)
 
     def _simulated_arrival(self, target_pose: PoseStamped, on_reached):
         """Updates simulated robot position and triggers the arrival callback."""
@@ -594,7 +883,10 @@ class TaskExecutionManager(Node):
         self.current_y = target_pose.pose.position.y
         on_reached()
 
-    def _on_goal_response(self, future, target_pose: PoseStamped, on_reached):
+    def _on_goal_response(self, future, target_pose: PoseStamped, on_reached,
+                          task_id: Optional[str], goal_generation: int):
+        if self.active_task_id != task_id or self._goal_generation != goal_generation:
+            return
         goal_handle = future.result()
         if not goal_handle or not goal_handle.accepted:
             self.get_logger().warn(
@@ -608,10 +900,15 @@ class TaskExecutionManager(Node):
         )
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(
-            lambda f: self._on_goal_result(f, target_pose, on_reached)
+            lambda f: self._on_goal_result(
+                f, target_pose, on_reached, task_id, goal_generation
+            )
         )
 
-    def _on_goal_result(self, future, target_pose: PoseStamped, on_reached):
+    def _on_goal_result(self, future, target_pose: PoseStamped, on_reached,
+                        task_id: Optional[str], goal_generation: int):
+        if self.active_task_id != task_id or self._goal_generation != goal_generation:
+            return
         status = future.result().status
         tx = target_pose.pose.position.x
         ty = target_pose.pose.position.y
@@ -620,6 +917,7 @@ class TaskExecutionManager(Node):
 
         # Allow arrival if status is SUCCEEDED or if physical distance is within tolerance
         if status == GoalStatus.STATUS_SUCCEEDED or dist <= tol:
+            self.current_goal_handle = None
             self.get_logger().info(
                 f'[{self.robot_id}] ✓ Arrival verified (status: {status}, '
                 f'distance to waypoint: {dist:.2f}m <= {tol:.2f}m)'
@@ -650,6 +948,7 @@ class TaskExecutionManager(Node):
         # Publish local and fleet
         self.assigned_task_pub.publish(t)
         self.task_event_pub.publish(t)
+        self.fleet_task_event_pub.publish(t)
 
         # Broadcast via P2P with full coordinate and authority metadata
         self.p2p.broadcast('TASK_STATUS', payload={

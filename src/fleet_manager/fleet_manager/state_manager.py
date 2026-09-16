@@ -67,8 +67,11 @@ class StateManager(Node):
         # Guard flag — suppress all publishing until AMCL delivers first pose
         self._amcl_initialized = False
 
-        # ── Fleet State Store ──────────────────────────────────────────────
-        self.fs = FleetState(robot_id=self.robot_id)
+        # ── Fleet State Store (Phase 10.1: CRDT-backed) ───────────────────
+        self.fs = FleetState(
+            robot_id=self.robot_id,
+            log_callback=lambda m: self.get_logger().info(m),
+        )
 
         # Initialise own entry with initial spawn pose; updated on amcl_pose/TF
         own = RobotEntry(
@@ -103,6 +106,7 @@ class StateManager(Node):
         )
         self.create_subscription(TaskPool, '/fleet/task_pool', self._task_pool_cb, latching_qos)
         self.create_subscription(Task, '/fleet/task_events', self._task_event_cb, 10)
+        self.create_subscription(Task, 'task_events', self._local_task_event_cb, 10)
 
         # P2P event subscription for reconnect handling
         self.create_subscription(P2PEvent, 'p2p_events', self._p2p_event_cb, 10)
@@ -114,6 +118,7 @@ class StateManager(Node):
         self.p2p.register_handler('TASK_POOL', self._on_p2p_task_pool)
         self.p2p.register_handler('STATE_SYNC_REQUEST', self._on_sync_request)
         self.p2p.register_handler('STATE_SYNC_RESPONSE', self._on_sync_response)
+        self.p2p.register_handler('CRDT_OPS', self._on_crdt_ops)
 
         # ── TF Buffer & Listener ───────────────────────────────────────────
         self.tf_buffer = Buffer()
@@ -194,14 +199,18 @@ class StateManager(Node):
             self._ingest_task_ros(task)
 
     def _task_event_cb(self, task: Task):
-        # Broadcaster-originated events without assignment require proximity to dock
-        if not task.assigned_robot_id:
-            own = self.fs.get_own_state()
-            cur_x = own.x if own else 0.0
-            cur_y = own.y if own else 0.0
-            dist_to_dock = math.hypot(cur_x - self.dock_x, cur_y - self.dock_y)
-            if dist_to_dock > self.comm_radius:
-                return
+        # `/fleet/*` is globally observable in simulation.  Treat it as a
+        # dock-broadcast source only; task execution updates beyond radio range
+        # arrive through the local or P2P paths instead.
+        own = self.fs.get_own_state()
+        cur_x = own.x if own else 0.0
+        cur_y = own.y if own else 0.0
+        if math.hypot(cur_x - self.dock_x, cur_y - self.dock_y) > self.comm_radius:
+            return
+        self._ingest_task_ros(task)
+
+    def _local_task_event_cb(self, task: Task):
+        """Accept this robot's Nav2 lifecycle event at any dock distance."""
         self._ingest_task_ros(task)
 
     def _ingest_task_ros(self, task: Task):
@@ -279,6 +288,7 @@ class StateManager(Node):
             entry = self.fs.task_entry_from_dict(d)
         except Exception:
             return
+        # Patch missing geometry from local knowledge (sender may have omitted zeros)
         existing = self.fs.get_task(entry.task_id)
         if existing:
             if entry.pickup_x == 0.0 and entry.pickup_y == 0.0:
@@ -294,16 +304,17 @@ class StateManager(Node):
         changed = self.fs.merge_task(entry)
         if changed:
             self.get_logger().debug(
-                f'[{self.robot_id}] Merged task {entry.task_id} '
-                f'(state: {entry.state}, clock: {entry.lamport_clock})'
+                f'[{self.robot_id}] [CRDT] Merged TASK_STATUS for {entry.task_id} '
+                f'state={entry.state} lamport={entry.lamport_clock}'
             )
 
     def _on_sync_request(self, msg: P2PMessage):
         """Peer is requesting a full world-view dump (reconnection)."""
         peer_id = msg.source_robot_id
         self.get_logger().info(
-            f'[{self.robot_id}] STATE_SYNC_REQUEST from {peer_id} — sending full WorldView'
+            f'[{self.robot_id}] STATE_SYNC_REQUEST from {peer_id} — sending full WorldView + CRDT op log'
         )
+        # world_view_to_dict() now includes 'ops_tasks' and 'ops_robots'
         wv = self.fs.world_view_to_dict()
         self.p2p.send_to(peer_id, 'STATE_SYNC_RESPONSE', wv)
 
@@ -312,16 +323,45 @@ class StateManager(Node):
         peer_id = msg.source_robot_id
         try:
             d = json.loads(msg.payload)
-            robots, tasks, peer_clock = self.fs.world_view_from_dict(d)
+            # world_view_from_dict returns 5-tuple in Phase 10.1
+            robots, tasks, peer_clock, ops_tasks, ops_robots = self.fs.world_view_from_dict(d)
         except Exception as e:
             self.get_logger().warn(f'[{self.robot_id}] Failed to parse sync response: {e}')
             return
-        result = self.fs.merge_world_view(robots, tasks)
+        result = self.fs.merge_world_view(
+            robots, tasks,
+            ops_tasks=ops_tasks,
+            ops_robots=ops_robots,
+        )
         self.get_logger().info(
-            f'[{self.robot_id}] STATE_SYNC from {peer_id} | '
-            f'+{result["robot_updates"]} robot entries, +{result["task_updates"]} task entries | '
+            f'[{self.robot_id}] [CRDT] Reconnect merge completed from {peer_id} | '
+            f'+{result["robot_updates"]} robots, +{result["task_updates"]} tasks | '
             f'Lamport clock now: {self.fs.clock}'
         )
+        if result.get('allocation_changed'):
+            self.get_logger().info(
+                f'[{self.robot_id}] [CRDT] Allocation-relevant state changed after reconnect sync'
+            )
+
+    def _on_crdt_ops(self, msg: P2PMessage):
+        """Receives incremental CRDT op-log delta from a peer."""
+        try:
+            d = json.loads(msg.payload)
+        except Exception:
+            return
+        ops_tasks  = d.get('ops_tasks', [])
+        ops_robots = d.get('ops_robots', [])
+        if ops_tasks or ops_robots:
+            result = self.fs.merge_world_view(
+                [], [],
+                ops_tasks=ops_tasks,
+                ops_robots=ops_robots,
+            )
+            if result.get('task_updates', 0) > 0:
+                self.get_logger().debug(
+                    f'[{self.robot_id}] [CRDT] Incremental ops from {msg.source_robot_id}: '
+                    f'+{result["task_updates"]} task ops'
+                )
 
     # ──────────────────────────────────────────────────────────────────────────
     # P2P Event Handler — Reconnection

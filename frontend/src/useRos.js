@@ -11,6 +11,9 @@
  *   /fleet/task_events   (fleet_interfaces/msg/Task)
  *   /fleet/bundles       (fleet_interfaces/msg/Bundle)
  *   /fleet/world_views   (fleet_interfaces/msg/WorldView)
+ *   /fleet/task_ownership (fleet_interfaces/msg/TaskOwnership)
+ *   /fleet/decision_log  (std_msgs/msg/String containing allocator audit JSON)
+ *   /fleet/traffic_events (std_msgs/msg/String containing reservation/ORCA/PIBT audit JSON)
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
@@ -48,6 +51,34 @@ export function svgToRos(px, py) {
     x: Math.round(rx * 1000) / 1000,
     y: Math.round(ry * 1000) / 1000,
   };
+}
+
+// ── Default Single-Lane Aisle Segments ──────────────────────────────────────
+export const DEFAULT_AISLES = [
+  { id: 'aisle_1', segment_id: 'aisle_1', name: 'Aisle 1', x_min: 1.5, x_max: 4.0, y_min: 0.0, y_max: 2.5, is_single_lane: true },
+  { id: 'aisle_2', segment_id: 'aisle_2', name: 'Aisle 2', x_min: 1.5, x_max: 4.0, y_min: -3.5, y_max: -1.0, is_single_lane: true },
+  { id: 'aisle_3', segment_id: 'aisle_3', name: 'Aisle 3', x_min: -4.5, x_max: -2.0, y_min: -2.0, y_max: 2.0, is_single_lane: true },
+];
+
+export function normalizeAisles(rawAisles) {
+  if (!Array.isArray(rawAisles)) return [];
+  return rawAisles.map((a, idx) => {
+    const segId = a.segment_id || a.id || `aisle_${idx + 1}`;
+    const x1 = Number(a.x_min);
+    const x2 = Number(a.x_max);
+    const y1 = Number(a.y_min);
+    const y2 = Number(a.y_max);
+    return {
+      id: segId,
+      segment_id: segId,
+      name: a.name || segId,
+      x_min: Math.round(Math.min(x1, x2) * 1000) / 1000,
+      x_max: Math.round(Math.max(x1, x2) * 1000) / 1000,
+      y_min: Math.round(Math.min(y1, y2) * 1000) / 1000,
+      y_max: Math.round(Math.max(y1, y2) * 1000) / 1000,
+      is_single_lane: a.is_single_lane ?? true,
+    };
+  });
 }
 
 // ── Robot colour palette (cycles for each unique robot_id) ──────────────────
@@ -128,7 +159,7 @@ class RosBridge {
         if (msg.op === 'publish') {
           (this.subs[msg.topic] || []).forEach((cb) => cb(msg.msg));
         }
-      } catch (_) { /* ignore parse errors */ }
+      } catch { /* ignore parse errors */ }
     };
   }
 
@@ -185,6 +216,20 @@ export function useRos() {
   const [liveRobots, setLiveRobots]   = useState(null);   // null = not yet received
   const [liveTasks, setLiveTasks]     = useState(null);
   const [liveBundles, setLiveBundles] = useState({});      // robot_id → Bundle msg
+  const [allocationEvents, setAllocationEvents] = useState([]);
+  const [trafficEvents, setTrafficEvents] = useState([]);
+  const [liveAisles, setLiveAisles]       = useState(() => {
+    try {
+      const saved = localStorage.getItem('fleet_aisle_config');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return normalizeAisles(parsed);
+        }
+      }
+    } catch (_) {}
+    return DEFAULT_AISLES;
+  });
   const [dockInfo, setDockInfo]       = useState(() => {
     const svgPos = rosToSvg(DEFAULT_DOCK_CONFIG.rosX, DEFAULT_DOCK_CONFIG.rosY);
     return {
@@ -278,9 +323,44 @@ export function useRos() {
       }
     });
 
+    // ── /fleet/task_ownership (show ownership as soon as it is claimed) ──
+    const unsubOwnership = bridge.subscribe('/fleet/task_ownership', (msg) => {
+      // STATUS_CLAIMED and STATUS_CONFIRMED are 0 and 1 respectively.
+      if (msg.status !== 0 && msg.status !== 1) return;
+      const existing = taskMapRef.current[msg.task_id];
+      if (!existing) return;
+      taskMapRef.current[msg.task_id] = {
+        ...existing,
+        assigned_robot_id: msg.robot_id,
+        // Preserve later lifecycle states received from task events.
+        state: Math.max(existing.state ?? 0, 1),
+      };
+      _flushTasks(setLiveTasks, taskMapRef.current);
+    });
+
     // ── /fleet/bundles ───────────────────────────────────────────────────
     const unsubBundles = bridge.subscribe('/fleet/bundles', (msg) => {
       setLiveBundles((prev) => ({ ...prev, [msg.robot_id]: msg }));
+    });
+
+    // ── /fleet/decision_log (recent Binary Max-Sum decisions) ───────────
+    const unsubDecisionLog = bridge.subscribe('/fleet/decision_log', (msg) => {
+      try {
+        const event = JSON.parse(msg.data);
+        setAllocationEvents((previous) => [...previous, event].slice(-12));
+      } catch {
+        // A malformed audit line must not interrupt the live dashboard.
+      }
+    });
+
+    // ── /fleet/traffic_events (aisle reservations, ORCA, PIBT) ──────────
+    const unsubTrafficEvents = bridge.subscribe('/fleet/traffic_events', (msg) => {
+      try {
+        const event = JSON.parse(msg.data);
+        setTrafficEvents((previous) => [...previous, event].slice(-20));
+      } catch {
+        // Keep the dashboard usable if an individual diagnostic message is malformed.
+      }
     });
 
     // ── /fleet/world_views (cross-check task states from each robot) ─────
@@ -311,14 +391,35 @@ export function useRos() {
       });
     });
 
+    // ── /fleet/aisle_config (dynamic single-lane aisle segment definitions) ─
+    const unsubAisles = bridge.subscribe('/fleet/aisle_config', (msg) => {
+      try {
+        const payload = typeof msg.data === 'string' ? JSON.parse(msg.data) : msg.data;
+        const list = payload.aisles || payload;
+        if (Array.isArray(list) && list.length > 0) {
+          const normalized = normalizeAisles(list);
+          setLiveAisles(normalized);
+          try {
+            localStorage.setItem('fleet_aisle_config', JSON.stringify(normalized));
+          } catch (_) {}
+        }
+      } catch (err) {
+        console.warn('Failed to parse /fleet/aisle_config:', err);
+      }
+    });
+
     return () => {
       unsubRobots();
       unsubMap();
       unsubPool();
       unsubEvents();
+      unsubOwnership();
       unsubBundles();
+      unsubDecisionLog();
+      unsubTrafficEvents();
       unsubWV();
       unsubDock();
+      unsubAisles();
     };
   }, [getRobotIndex]);
 
@@ -367,7 +468,39 @@ export function useRos() {
     return true;
   }, []);
 
-  return { rosStatus, liveRobots, liveTasks, liveBundles, dockInfo, broadcastTasks };
+  // ── Broadcast and save updated single-lane aisle configurations ─────────────
+  const saveAislesConfig = useCallback((newAisles) => {
+    const normalized = normalizeAisles(newAisles);
+    setLiveAisles(normalized);
+    try {
+      localStorage.setItem('fleet_aisle_config', JSON.stringify(normalized));
+    } catch (_) {}
+
+    const bridge = getBridge();
+    if (bridge && bridge.connected) {
+      bridge.publish('/fleet/aisle_config', 'std_msgs/msg/String', {
+        data: JSON.stringify({
+          source_robot_id: 'frontend_ui',
+          timestamp: Date.now() / 1000,
+          aisles: normalized,
+        }),
+      });
+    }
+    return true;
+  }, []);
+
+  return {
+    rosStatus,
+    liveRobots,
+    liveTasks,
+    liveBundles,
+    allocationEvents,
+    trafficEvents,
+    liveAisles,
+    dockInfo,
+    broadcastTasks,
+    saveAislesConfig,
+  };
 }
 
 // ── Convert taskMap → UI task array ─────────────────────────────────────────

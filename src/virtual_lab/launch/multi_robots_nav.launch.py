@@ -9,7 +9,7 @@ from launch.actions import (
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.actions import ComposableNodeContainer, Node, SetRemap
 from launch_ros.actions import PushRosNamespace
 
 from ament_index_python.packages import get_package_share_directory
@@ -123,6 +123,7 @@ def generate_launch_description():
     robot1_navigation = GroupAction(
         actions=[
             PushRosNamespace('robot1'),
+            SetRemap(src='cmd_vel', dst='cmd_vel_nav'),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch
@@ -182,6 +183,7 @@ def generate_launch_description():
     robot2_navigation = GroupAction(
         actions=[
             PushRosNamespace('robot2'),
+            SetRemap(src='cmd_vel', dst='cmd_vel_nav'),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch
@@ -241,6 +243,7 @@ def generate_launch_description():
     robot3_navigation = GroupAction(
         actions=[
             PushRosNamespace('robot3'),
+            SetRemap(src='cmd_vel', dst='cmd_vel_nav'),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     navigation_launch

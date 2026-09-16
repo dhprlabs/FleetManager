@@ -1,0 +1,29 @@
+{
+  "aisle_1": {
+    "segment_id": "aisle_1",
+    "x_min": 1.5,
+    "x_max": 4.0,
+    "y_min": 0.0,
+    "y_max": 2.5,
+    "is_single_lane": true,
+    "description": "Main picking aisle 1 (narrow single lane)"
+  },
+  "aisle_2": {
+    "segment_id": "aisle_2",
+    "x_min": 1.5,
+    "x_max": 4.0,
+    "y_min": -3.5,
+    "y_max": -1.0,
+    "is_single_lane": true,
+    "description": "Main picking aisle 2 (narrow single lane)"
+  },
+  "aisle_3": {
+    "segment_id": "aisle_3",
+    "x_min": -4.5,
+    "x_max": -2.0,
+    "y_min": -2.0,
+    "y_max": 2.0,
+    "is_single_lane": true,
+    "description": "Dropoff transit corridor (narrow single lane)"
+  }
+}

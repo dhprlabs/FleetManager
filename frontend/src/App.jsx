@@ -123,6 +123,23 @@ function RobotStatusPanel({ robots }) {
     );
 }
 
+function MapScale({ mapScale }) {
+    const scaleOptions = [0.5, 1, 2, 5, 10, 20, 50];
+    const zoom = mapScale?.zoom ?? 100;
+    const pixelsPerMeter = mapScale?.pixelsPerMeter ?? 20;
+    const distance = [...scaleOptions].reverse().find((option) => option * pixelsPerMeter <= 130) || 0.5;
+    const width = Math.max(24, Math.round(distance * pixelsPerMeter));
+
+    return (
+        <div className="flex items-center gap-2 rounded-[8px] border border-[#e3e6e1] bg-white/95 px-2.5 py-1 text-[11px] font-medium text-[#4a554e] shadow-sm backdrop-blur-sm" aria-label={`Map scale: ${distance} meters at ${zoom}% zoom`}>
+            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8e988f]">Scale</span>
+            <div className="relative h-2 border-b-2 border-l-2 border-r-2 border-[#2f6f5e]" style={{ width }} />
+            <span className="whitespace-nowrap font-medium">{distance} m</span>
+            <span className="text-[#8e988f]">• {zoom}%</span>
+        </div>
+    );
+}
+
 function MapPanel({
     robots,
     selectionMode,
@@ -150,6 +167,7 @@ function MapPanel({
     const [blockedMessage, setBlockedMessage] = useState("");
     const [instructionHovered, setInstructionHovered] = useState(false);
     const [hoverMapPoint, setHoverMapPoint] = useState(null);
+    const [pixelsPerMeter, setPixelsPerMeter] = useState(20);
     const zoom = Math.round((baseViewBox.w / viewBox.w) * 100);
     const currentTaskNum = stagedTasks.length + 1;
 
@@ -158,9 +176,11 @@ function MapPanel({
             const rect = svgRef.current?.getBoundingClientRect();
             if (!rect || !rect.width || !rect.height) return;
             const pixelsPerMapUnit = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
+            const ppm = pixelsPerMapUnit * 20;
+            setPixelsPerMeter(ppm);
             onZoomChange?.({
                 zoom,
-                pixelsPerMeter: pixelsPerMapUnit * 20,
+                pixelsPerMeter: ppm,
             });
         }
 
@@ -775,6 +795,11 @@ function MapPanel({
                 </div>
             )}
 
+            {/* Scale Bar below the map floor */}
+            <div className="absolute bottom-4 left-4 z-[6]">
+                <MapScale mapScale={{ zoom, pixelsPerMeter }} />
+            </div>
+
             <div className="absolute bottom-4 right-4 z-[6] flex flex-col overflow-hidden rounded-[9px] border border-[#e3e6e1] bg-white shadow-[0_2px_8px_rgb(27_35_31_/_6%)]">
                 <button
                     className="h-[34px] w-[34px] border-b border-[#eceee9] bg-white text-base text-[#1b231f] hover:bg-[#f7f8f6]"
@@ -1044,8 +1069,8 @@ function AllocationPanel({ allocationEvents, trafficEvents, liveBundles }) {
     const bundles = Object.entries(liveBundles).sort(([a], [b]) => a.localeCompare(b));
 
     return (
-        <section className="flex min-h-0 flex-[0.8] flex-col border-t border-[#c4cbc5] bg-white md:border-l">
-            <div className="flex items-center justify-between border-b border-[#eceee9] px-3.5 py-2.5 md:px-5">
+        <section className="flex min-h-0 flex-1 min-w-0 flex-col bg-white border-t border-[#c4cbc5] md:border-t-0 md:border-l md:border-[#c4cbc5] md:max-w-[48%] xl:max-w-[44%]">
+            <div className="flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
                 <h2 className="m-0 text-[13px] font-semibold" style={displayFont}>
                     ALLOCATION <i>TRACE</i>
                 </h2>
@@ -1109,38 +1134,18 @@ function AllocationPanel({ allocationEvents, trafficEvents, liveBundles }) {
     );
 }
 
-function MapScale({ mapScale }) {
-    const scaleOptions = [0.5, 1, 2, 5, 10, 20, 50];
-    const zoom = mapScale?.zoom ?? 100;
-    const pixelsPerMeter = mapScale?.pixelsPerMeter ?? 20;
-    const distance = [...scaleOptions].reverse().find((option) => option * pixelsPerMeter <= 130) || 0.5;
-    const width = Math.max(24, Math.round(distance * pixelsPerMeter));
-
-    return (
-        <div className="flex items-center gap-2 rounded-[7px] border border-[#e3e6e1] bg-[#f7f8f6] px-2.5 py-1 text-[10.5px] font-medium text-[#4a554e]" aria-label={`Map scale: ${distance} meters at ${zoom}% zoom`}>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8e988f]">Scale</span>
-            <div className="relative h-2 border-b-2 border-l-2 border-r-2 border-[#2f6f5e]" style={{ width }} />
-            <span className="whitespace-nowrap">{distance} m</span>
-            <span className="text-[#8e988f]">{zoom}%</span>
-        </div>
-    );
-}
-
-function EfficiencyPanel({ tasks, mapZoom }) {
+function EfficiencyPanel({ tasks }) {
     const [fullScreen, setFullScreen] = useState(false);
     const [minimized, setMinimized] = useState(false);
 
     return (
         <section
-            className={`flex flex-none flex-col border-t border-[#c4cbc5] bg-white ${fullScreen ? "fixed inset-0 z-40 h-screen" : minimized ? "h-9" : "h-[270px] md:h-[248px]"}`}
+            className={`flex min-h-0 flex-1 min-w-0 flex-col bg-white ${fullScreen ? "fixed inset-0 z-40 h-screen" : minimized ? "h-9 flex-none" : "h-[270px] md:h-full"}`}
         >
             <div className="relative flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
                 <h2 className="m-0 whitespace-nowrap text-[13px] font-semibold" style={displayFont}>
                     EFFICIENCY <i>TIMELINE</i>
                 </h2>
-                <div className="absolute left-1/2 -translate-x-1/2">
-                    {!minimized && !fullScreen && <MapScale mapScale={mapZoom} />}
-                </div>
                 <div className="flex items-center gap-1">
                     <button
                         className="relative flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
@@ -2102,8 +2107,8 @@ function App() {
                         onClearStaged={clearStagedTasks}
                     />
                 </div>
-                <div className="flex min-h-0 flex-[0.95] flex-col md:flex-row">
-                    <EfficiencyPanel tasks={tasks} mapZoom={mapZoom} />
+                <div className="flex min-h-0 flex-[0.85] flex-col border-t border-[#c4cbc5] md:flex-row">
+                    <EfficiencyPanel tasks={tasks} />
                     <AllocationPanel allocationEvents={allocationEvents} trafficEvents={trafficEvents} liveBundles={liveBundles} />
                 </div>
             </main>

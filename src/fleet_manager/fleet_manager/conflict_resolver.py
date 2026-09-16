@@ -788,12 +788,16 @@ class ConflictResolver(Node):
         if is_active and override_vel is not None:
             self.override_pub.publish(twist_msg)
             self.local_override_pub.publish(twist_msg)
-            self.get_logger().info(log_msg)
             event = 'orca_avoidance' if 'Open-space conflict' in log_msg else 'pibt_wait'
             if event != self._last_traffic_state:
+                self.get_logger().info(log_msg)
                 self._publish_traffic_event(event, segment_id=approaching_aisle or '', detail=log_msg)
+            else:
+                self.get_logger().debug(log_msg)
             self._last_traffic_state = event
         else:
+            if self._last_traffic_state:
+                self.get_logger().info(f"[{self.robot_id}] Physical conflict resolved. Resuming normal Nav2 operation.")
             self._last_traffic_state = ''
 
 
@@ -805,8 +809,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

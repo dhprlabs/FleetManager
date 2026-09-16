@@ -463,9 +463,9 @@ class MaxSumAllocator(Node):
     def _log_info(self, msg: str):
         self.get_logger().info(f'[{self.robot_id}] {msg}')
 
-    def _audit(self, event: str, trace_id: Optional[str] = None, **details):
+    def _audit(self, event: str, trace_id: Optional[str] = None, level: str = 'info', **details):
         record = audit_event(self.get_logger(), 'maxsum_allocator', event, self.robot_id,
-                             trace_id=trace_id, **details)
+                             level=level, trace_id=trace_id, **details)
         if hasattr(self, 'decision_log_pub'):
             message = String()
             message.data = json.dumps(record, default=str, separators=(',', ':'))
@@ -538,7 +538,7 @@ class MaxSumAllocator(Node):
         synchronized_peers = self.reachable_peers & world_view_peer_ids
         waiting_for_sync = self.pending_join_peers - world_view_peer_ids
         synchronized_joins = self.pending_join_peers & synchronized_peers
-        self._audit('world_view_received', task_count=len(msg.task_states),
+        self._audit('world_view_received', level='debug', task_count=len(msg.task_states),
                     peer_count=len(msg.peer_states), reachable_peers=sorted(self.reachable_peers),
                     synchronized_peers=sorted(synchronized_peers))
         if waiting_for_sync:
@@ -776,8 +776,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

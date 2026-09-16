@@ -68,9 +68,18 @@ class StateManager(Node):
         self._amcl_initialized = False
 
         # ── Fleet State Store (Phase 10.1: CRDT-backed) ───────────────────
+        def _crdt_log(msg: str):
+            # Routine robot pose/heartbeat updates occur continuously at 5-10 Hz.
+            # Log routine robot updates at DEBUG to keep terminal logs clean and readable.
+            # Lifecycle events (tasks, state transitions, reconciliations) remain at INFO.
+            if 'UPDATE entity=robot' in msg or 'Duplicate operation' in msg:
+                self.get_logger().debug(msg)
+            else:
+                self.get_logger().info(msg)
+
         self.fs = FleetState(
             robot_id=self.robot_id,
-            log_callback=lambda m: self.get_logger().info(m),
+            log_callback=_crdt_log,
         )
 
         # Initialise own entry with initial spawn pose; updated on amcl_pose/TF
@@ -532,8 +541,15 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == '__main__':

@@ -810,6 +810,7 @@ function TaskStatusPanel({
     onCancel,
     onDelete,
     onBroadcastStaged,
+    onStageFive,
     onRemoveStaged,
     onClearStaged,
 }) {
@@ -823,14 +824,16 @@ function TaskStatusPanel({
                     TASK <i>STATUS</i>
                 </h2>
                 <div className="flex items-center gap-1.5">
-                    <button
-                        className="flex items-center gap-1 rounded-full border border-[#d6ded8] bg-[#f7f8f6] px-2.5 py-1 text-[11px] font-semibold text-[#4a554e] hover:bg-[#eceee9] transition-colors"
-                        onClick={onStageFive}
-                        title="Quick-fill 5 warehouse tasks"
-                    >
-                        <span>⚡</span>
-                        <span>5 Preset</span>
-                    </button>
+                    {onStageFive && (
+                        <button
+                            className="flex items-center gap-1 rounded-full border border-[#d6ded8] bg-[#f7f8f6] px-2.5 py-1 text-[11px] font-semibold text-[#4a554e] hover:bg-[#eceee9] transition-colors"
+                            onClick={onStageFive}
+                            title="Quick-fill 5 warehouse tasks"
+                        >
+                            <span>⚡</span>
+                            <span>5 Preset</span>
+                        </button>
+                    )}
                     <button
                         className={`relative flex h-6 items-center justify-start rounded-full pl-6 pr-2.5 text-[11px] font-semibold transition-colors ${selectionMode
                             ? "bg-[#f6e4e1] text-[#c0453b] hover:bg-[#efc7c2]"
@@ -1975,6 +1978,31 @@ function App() {
         }
     }
 
+    // Quick-fills 5 preset warehouse tasks across open aisles
+    function stageFiveWarehouseTasks() {
+        const samples = [
+            { id: "T1", p: { x: 2.0, y: 1.0 }, d: { x: -2.0, y: -1.0 }, pri: 2 },
+            { id: "T2", p: { x: 3.5, y: 1.0 }, d: { x: -3.5, y: -1.0 }, pri: 1 },
+            { id: "T3", p: { x: 2.0, y: -2.5 }, d: { x: -2.0, y: 2.5 }, pri: 3 },
+            { id: "T4", p: { x: 4.0, y: -2.5 }, d: { x: -4.0, y: 2.5 }, pri: 1 },
+            { id: "T5", p: { x: 1.0, y: 3.0 }, d: { x: -1.0, y: -3.0 }, pri: 2 },
+        ];
+        const newStaged = samples.map((s, idx) => ({
+            id: `staged-${s.id}-${Date.now()}`,
+            number: idx + 1,
+            name: s.id,
+            start: rosToSvg(s.p.x, s.p.y),
+            end: rosToSvg(s.d.x, s.d.y),
+            pickupRos: s.p,
+            dropoffRos: s.d,
+            priority: s.pri,
+        }));
+        setStagedTasks(newStaged);
+        setSelectionMode(false);
+        setSelectedPoints([]);
+        setToastMessage("Pre-staged 5 warehouse tasks! Click 'Broadcast Fleet Tasks' to deploy.");
+    }
+
     function removeStagedTask(id) {
         setStagedTasks((prev) => prev.filter((t) => t.id !== id));
     }
@@ -2069,6 +2097,7 @@ function App() {
                         onCancel={cancelTaskSelection}
                         onDelete={requestDeleteTask}
                         onBroadcastStaged={handleBroadcastStaged}
+                        onStageFive={stageFiveWarehouseTasks}
                         onRemoveStaged={removeStagedTask}
                         onClearStaged={clearStagedTasks}
                     />

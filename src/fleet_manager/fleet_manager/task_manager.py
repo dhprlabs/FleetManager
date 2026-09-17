@@ -41,6 +41,8 @@ class TaskManager(Node):
         self.declare_parameter('robot_id', default_id)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('broadcaster_x', 5.0)
+        self.declare_parameter('broadcaster_y', 12.0)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -48,6 +50,8 @@ class TaskManager(Node):
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
         self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
         self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
+        self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
@@ -99,16 +103,16 @@ class TaskManager(Node):
         self._has_pose = True
 
     def _handle_task_pool(self, msg: TaskPool):
-        # Enforce physical radio range to dock station broadcaster
-        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
-        if dist_to_dock > self.comm_radius:
+        # Enforce physical radio range to task broadcaster
+        dist_to_broadcaster = math.hypot(self.current_x - self.broadcaster_x, self.current_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
             return
         for task in msg.tasks:
             self._ingest_task(task, from_broadcaster=True)
 
     def _handle_task_event(self, task: Task):
-        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
-        if dist_to_dock > self.comm_radius:
+        dist_to_broadcaster = math.hypot(self.current_x - self.broadcaster_x, self.current_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
             return
         self._ingest_task(task, from_broadcaster=True)
 

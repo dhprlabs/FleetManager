@@ -28,6 +28,7 @@ try:
     import rclpy
     from rclpy.node import Node
     from geometry_msgs.msg import Twist, PoseStamped, Point
+    from nav_msgs.msg import Path
     from std_msgs.msg import String
     from fleet_interfaces.msg import Intent, Reservation, RobotState
     _ROS_AVAILABLE = True
@@ -294,12 +295,41 @@ class ORCAEngine:
         """
         planes: List[HalfPlane] = []
         conflict_detected = False
+        emergency_stop = False
 
         for n_pos, n_vel in neighbors:
             rel_pos = n_pos - robot_pos
             rel_dist = rel_pos.length()
             if rel_dist > 4.5:
                 continue
+
+            # ── Emergency stop: within physical collision distance ─────────────
+            # Triggered when robots are within combined_radius*1.3 regardless of
+            # velocity direction.  This catches the same-direction trailing case
+            # that standard ORCA cannot resolve (zero relative velocity → zero u).
+            if rel_dist < self.combined_radius * 1.3:
+                emergency_stop = True
+                conflict_detected = True
+                continue
+
+            # ── Same-direction proximity bias ─────────────────────────────────
+            # When two robots move in the same direction at similar speed,
+            # the relative velocity ≈ 0, so ORCA computes zero avoidance.
+            # Inject a right-lateral bias into the preferred velocity so that
+            # the ORCA constraint has something to work against.
+            pref_len = pref_vel.length()
+            rel_vel_direct = robot_vel - n_vel
+            same_dir_closing = (rel_dist < self.combined_radius * 2.5
+                                 and rel_vel_direct.length() < 0.06
+                                 and pref_len > 0.02)
+            if same_dir_closing:
+                # Perpendicular-right of current motion (port-starboard rule)
+                perp = Vector2(-pref_vel.y, pref_vel.x).normalized()
+                bias_strength = max(0.12, pref_len * 0.45)
+                pref_vel = pref_vel + perp * bias_strength
+                if pref_vel.length() > self.max_speed:
+                    pref_vel = pref_vel.normalized() * self.max_speed
+                conflict_detected = True
 
             # Check if moving towards each other
             rel_vel = robot_vel - n_vel
@@ -312,6 +342,10 @@ class ORCAEngine:
                 if is_closing and (u.length() > 0.05 or rel_dist < (self.combined_radius * 1.5)):
                     conflict_detected = True
                 planes.append(hp)
+
+        # Emergency stop overrides all: return zero velocity immediately
+        if emergency_stop:
+            return Vector2(0.0, 0.0), True
 
         if not conflict_detected or not planes:
             return pref_vel, False
@@ -669,6 +703,13 @@ class ConflictResolver(Node):
         self.aisle_config_sub = self.create_subscription(
             String, '/fleet/aisle_config', self.handle_aisle_config, 10
         )
+        # Fix 2: Subscribe to this robot's Nav2 global plan to do path-based
+        # aisle reservation instead of proximity-only.
+        self._nav_plan_waypoints: List[Tuple[float, float]] = []
+        if _ROS_AVAILABLE:
+            self.plan_sub = self.create_subscription(
+                Path, f'/{self.robot_id}/plan', self.handle_plan, 5
+            )
 
         # Nav2 is remapped to cmd_vel_nav.  This node is the command mux: it
         # forwards Nav2 while clear and substitutes ORCA/PIBT commands only
@@ -728,9 +769,45 @@ class ConflictResolver(Node):
     def handle_nav2_cmd(self, msg: Twist):
         self.nav2_pref_vel = Vector2(msg.linear.x, msg.linear.y)
 
+    def handle_plan(self, msg: 'Path'):
+        """Cache Nav2 global plan waypoints for path-based aisle reservation."""
+        self._nav_plan_waypoints = [
+            (p.pose.position.x, p.pose.position.y)
+            for p in (msg.poses or [])
+        ]
+
+    def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 0.15) -> bool:
+        """
+        Returns True if any waypoint in the cached Nav2 plan falls inside the
+        given aisle segment (with an optional inflation margin).
+        Falls back to True (allow reservation) if no plan is cached yet.
+        """
+        if not self._nav_plan_waypoints:
+            # No plan available yet — fall back to proximity-based behaviour
+            # so we don't block legitimate reservations on startup.
+            return True
+        spec = self.coordinator.aisle_segments.get(seg_id)
+        if spec is None:
+            return True
+        x_min = spec['x_min'] - inflation
+        x_max = spec['x_max'] + inflation
+        y_min = spec['y_min'] - inflation
+        y_max = spec['y_max'] + inflation
+        for (wx, wy) in self._nav_plan_waypoints:
+            if x_min <= wx <= x_max and y_min <= wy <= y_max:
+                return True
+        return False
+
     def _request_approaching_aisle(self, segment_id: str):
         """Request each approach once; ReservationManager owns arbitration."""
         if segment_id in self._requested_aisles:
+            return
+        # Fix 2: Only request if our Nav2 plan actually passes through the aisle.
+        if not self._plan_passes_through_aisle(segment_id):
+            self.get_logger().debug(
+                f'[{self.robot_id}] [TRAFFIC] Skipping reservation for {segment_id}: '
+                f'Nav2 plan does not pass through this aisle.'
+            )
             return
         self._requested_aisles.add(segment_id)
         self._reservation_clock += 1

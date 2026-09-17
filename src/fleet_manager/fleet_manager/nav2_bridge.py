@@ -81,6 +81,8 @@ class TaskExecutionManager(Node):
         self.declare_parameter('enable_pickup_validation', True)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('broadcaster_x', 5.0)
+        self.declare_parameter('broadcaster_y', 12.0)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -93,17 +95,26 @@ class TaskExecutionManager(Node):
         self.reconciliation_timeout_sec = self.get_parameter('reconciliation_timeout_sec').get_parameter_value().double_value
         self.gazebo_item_prefix = self.get_parameter('gazebo_item_prefix').get_parameter_value().string_value
         self.enable_pickup_validation = self.get_parameter('enable_pickup_validation').get_parameter_value().bool_value
-        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
-        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
+        self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
+        # Treat initial pose as the robot's dock position
+        self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value if self.has_parameter('dock_x') else init_x
+        self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value if self.has_parameter('dock_y') else init_y
+        if self.dock_x == 5.0 and self.dock_y == 12.0:
+            self.dock_x, self.dock_y = init_x, init_y
 
         # Execution State Machine
         self.execution_state = TaskExecutionState.IDLE
         self.active_task_id: Optional[str] = None
         self.active_task_info: Optional[Dict] = None
         self._dwell_timer = None
+
+        # Dock-return fallback tracking (Root Cause 2)
+        self._dock_return_active: bool = False
+        self._dock_return_generation: int = 0
 
         # Robot Live Pose
         self.current_x: float = init_x
@@ -207,7 +218,8 @@ class TaskExecutionManager(Node):
             f'[{self.robot_id}] Task Execution Manager active | '
             f'Nav2 Target: /{self.robot_id}/navigate_to_pose | '
             f'Dwell: {self.pickup_dwell_sec}s | '
-            f'Pickup validation: {self.enable_pickup_validation}'
+            f'Pickup validation: {self.enable_pickup_validation} | '
+            f'Home Dock: ({self.dock_x:.2f}, {self.dock_y:.2f})'
         )
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -255,9 +267,9 @@ class TaskExecutionManager(Node):
                     self._abort_active_task(self.active_task_id, release_ownership=False)
 
     def _handle_task_pool(self, msg: TaskPool):
-        # Ignore global DDS broadcast if robot is out of radio range of dock station
-        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
-        if dist_to_dock > self.comm_radius:
+        # Ignore global DDS broadcast if robot is out of radio range of task broadcaster
+        dist_to_broadcaster = math.hypot(self.current_x - self.broadcaster_x, self.current_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
             return
         for t in msg.tasks:
             self.task_cache[t.task_id] = {
@@ -267,6 +279,9 @@ class TaskExecutionManager(Node):
             }
 
     def _handle_task_event(self, t: Task):
+        dist_to_broadcaster = math.hypot(self.current_x - self.broadcaster_x, self.current_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
+            return
         self.task_cache[t.task_id] = {
             'pickup_pose': t.pickup_pose,
             'dropoff_pose': t.dropoff_pose,
@@ -924,9 +939,19 @@ class TaskExecutionManager(Node):
             )
             on_reached()
         else:
-            self.get_logger().warn(
-                f'[{self.robot_id}] Nav2 goal ended with status: {status}, distance: {dist:.2f}m (tol: {tol:.2f}m)'
+            # Nav2 aborted, cancelled, or failed.  The execution state machine is
+            # now stuck and the task will never complete unless we release it.
+            # Publish STATE_BLOCKED so Max-Sum triggers a reallocation re-bid,
+            # then release ownership and return to IDLE.
+            self.get_logger().error(
+                f'[{self.robot_id}] Nav2 goal FAILED (status: {status}, '
+                f'distance: {dist:.2f}m > tol: {tol:.2f}m). '
+                f'Marking task {self.active_task_id} BLOCKED and releasing for reallocation.'
             )
+            self.current_goal_handle = None
+            if self.active_task_id and self.active_task_info:
+                self._publish_task_state(Task.STATE_BLOCKED)
+            self._abort_active_task(self.active_task_id, release_ownership=True)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Helper & Event Broadcasting
@@ -965,12 +990,66 @@ class TaskExecutionManager(Node):
         })
 
     def _eval_execution_step(self):
-        """Periodic safety check and proximity arrival watchdog."""
+        """Periodic safety check, proximity arrival watchdog, and dock-return fallback."""
+        tol = max(self.arrival_tolerance, 0.8)
+
+        # ── IDLE: dock-return fallback (Root Cause 2) ──────────────────────────
+        # When the robot has no active task and is outside comm_radius of the dock
+        # it cannot receive new task broadcasts or gossip with peers.  Navigate it
+        # back to the dock so it re-enters the radio mesh.
+        if self.execution_state == TaskExecutionState.IDLE and not self.active_task_id:
+            dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
+            if dist_to_dock > self.comm_radius and not self._dock_return_active:
+                self._dock_return_active = True
+                self._dock_return_generation += 1
+                generation = self._dock_return_generation
+                self.get_logger().info(
+                    f'[{self.robot_id}] [DOCK_RETURN] IDLE and {dist_to_dock:.1f}m from dock '
+                    f'(radius={self.comm_radius}m). Navigating back to dock at '
+                    f'({self.dock_x:.1f}, {self.dock_y:.1f})...'
+                )
+                dock_pose = PoseStamped()
+                dock_pose.header.frame_id = 'map'
+                dock_pose.header.stamp = self.get_clock().now().to_msg()
+                dock_pose.pose.position.x = self.dock_x
+                dock_pose.pose.position.y = self.dock_y
+                dock_pose.pose.orientation.w = 1.0
+
+                def _on_dock_arrived():
+                    if self._dock_return_generation != generation:
+                        return
+                    self._dock_return_active = False
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [DOCK_RETURN] Arrived at dock. '
+                        f'Now within comm_radius — resuming normal operation.'
+                    )
+
+                self._dispatch_navigation(
+                    target_pose=dock_pose,
+                    target_name='DOCK (fallback return)',
+                    on_reached=_on_dock_arrived,
+                )
+            elif dist_to_dock <= self.comm_radius and self._dock_return_active:
+                # Arrived back within range; the arrival callback will clear the flag.
+                # Safety: clear it here too in case the callback was missed.
+                self._dock_return_active = False
+            return
+
+        # If a task was just assigned, cancel any in-flight dock-return.
+        if self._dock_return_active and self.active_task_id:
+            self._dock_return_active = False
+            self._dock_return_generation += 1
+            if self.current_goal_handle:
+                try:
+                    self.current_goal_handle.cancel_goal_async()
+                except Exception:
+                    pass
+                self.current_goal_handle = None
+
         if not self.active_task_id or not self.active_task_info:
             return
 
-        tol = max(self.arrival_tolerance, 0.8)
-
+        # ── Active task proximity watchdog ────────────────────────────────────
         if self.execution_state == TaskExecutionState.DELIVERING:
             dropoff = self.active_task_info.get('dropoff_pose')
             if dropoff:
@@ -1008,6 +1087,7 @@ class TaskExecutionManager(Node):
                             pass
                         self.current_goal_handle = None
                     self._on_pickup_arrival()
+
 
 
 def main(args=None):

@@ -52,6 +52,8 @@ class StateManager(Node):
         self.declare_parameter('beacon_rate', 1.0)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('broadcaster_x', 5.0)
+        self.declare_parameter('broadcaster_y', 12.0)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -60,6 +62,8 @@ class StateManager(Node):
         self.beacon_rate = self.get_parameter('beacon_rate').get_parameter_value().double_value
         self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
         self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
+        self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
@@ -128,6 +132,10 @@ class StateManager(Node):
         self.p2p.register_handler('STATE_SYNC_REQUEST', self._on_sync_request)
         self.p2p.register_handler('STATE_SYNC_RESPONSE', self._on_sync_response)
         self.p2p.register_handler('CRDT_OPS', self._on_crdt_ops)
+
+        # Tracks (task_id, lamport_clock) tuples already relayed to prevent gossip loops.
+        self._relayed_task_ops: set = set()
+
 
         # ── TF Buffer & Listener ───────────────────────────────────────────
         self.tf_buffer = Buffer()
@@ -201,20 +209,20 @@ class StateManager(Node):
         own = self.fs.get_own_state()
         cur_x = own.x if own else 0.0
         cur_y = own.y if own else 0.0
-        dist_to_dock = math.hypot(cur_x - self.dock_x, cur_y - self.dock_y)
-        if dist_to_dock > self.comm_radius:
+        dist_to_broadcaster = math.hypot(cur_x - self.broadcaster_x, cur_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
             return
         for task in msg.tasks:
             self._ingest_task_ros(task)
 
     def _task_event_cb(self, task: Task):
         # `/fleet/*` is globally observable in simulation.  Treat it as a
-        # dock-broadcast source only; task execution updates beyond radio range
+        # broadcaster source only; task execution updates beyond radio range
         # arrive through the local or P2P paths instead.
         own = self.fs.get_own_state()
         cur_x = own.x if own else 0.0
         cur_y = own.y if own else 0.0
-        if math.hypot(cur_x - self.dock_x, cur_y - self.dock_y) > self.comm_radius:
+        if math.hypot(cur_x - self.broadcaster_x, cur_y - self.broadcaster_y) > self.comm_radius:
             return
         self._ingest_task_ros(task)
 
@@ -316,6 +324,24 @@ class StateManager(Node):
                 f'[{self.robot_id}] [CRDT] Merged TASK_STATUS for {entry.task_id} '
                 f'state={entry.state} lamport={entry.lamport_clock}'
             )
+            # ── Multi-hop gossip relay (Root Cause 3 fix) ──────────────────
+            # Re-broadcast this state update to all reachable peers so the
+            # information can cross radio partitions through intermediate nodes.
+            # Use a (task_id, lamport_clock) dedup key to break relay loops.
+            relay_key = (entry.task_id, entry.lamport_clock)
+            if relay_key not in self._relayed_task_ops:
+                self._relayed_task_ops.add(relay_key)
+                # Bound the set size to prevent unbounded memory growth.
+                if len(self._relayed_task_ops) > 2000:
+                    self._relayed_task_ops = set(list(self._relayed_task_ops)[-1000:])
+                updated = self.fs.get_task(entry.task_id)
+                if updated:
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [GOSSIP] Relaying TASK_STATUS {entry.task_id} '
+                        f'state={entry.state} L={entry.lamport_clock} from {msg.source_robot_id}'
+                    )
+                    self.p2p.broadcast('TASK_STATUS', self.fs.task_entry_to_dict(updated))
+
 
     def _on_sync_request(self, msg: P2PMessage):
         """Peer is requesting a full world-view dump (reconnection)."""

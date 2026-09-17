@@ -15,6 +15,19 @@ DEFAULT_SPAWN_POSES = {
     'robot_3': (4.3, 1.2),
 }
 
+# Per-robot default dock/charging-station positions.
+# Each robot docks near its spawn so they never share a dock point
+# (prevents the idle-return collision cluster at a single dock).
+# These can be overridden at runtime via the /fleet/dock_config topic.
+DEFAULT_DOCK_POSES = {
+    'robot1':  (7.7, 14.4),
+    'robot2':  (3.4, 14.6),
+    'robot3':  (4.3,  1.2),
+    'robot_1': (7.7, 14.4),
+    'robot_2': (3.4, 14.6),
+    'robot_3': (4.3,  1.2),
+}
+
 
 def launch_setup(context, *args, **kwargs):
     robots_str = LaunchConfiguration('robots').perform(context)
@@ -55,6 +68,8 @@ def launch_setup(context, *args, **kwargs):
     for robot_name in robot_list:
         spawn_pos = DEFAULT_SPAWN_POSES.get(robot_name, (0.0, 0.0))
         init_x, init_y = spawn_pos[0], spawn_pos[1]
+        # Treat initial pose as the robot's dock position
+        rdock_x, rdock_y = init_x, init_y
 
         robot_nodes = [
             Node(
@@ -67,8 +82,10 @@ def launch_setup(context, *args, **kwargs):
                     'robot_id': robot_name,
                     'beacon_rate': 1.0,
                     'update_rate': 2.0,
-                    'dock_x': dock_x,
-                    'dock_y': dock_y,
+                    'dock_x': rdock_x,
+                    'dock_y': rdock_y,
+                    'broadcaster_x': dock_x,
+                    'broadcaster_y': dock_y,
                     'communication_radius': comm_radius,
                     'initial_x': init_x,
                     'initial_y': init_y,
@@ -82,8 +99,10 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{
                     'use_sim_time': use_sim_time,
                     'robot_id': robot_name,
-                    'dock_x': dock_x,
-                    'dock_y': dock_y,
+                    'dock_x': rdock_x,
+                    'dock_y': rdock_y,
+                    'broadcaster_x': dock_x,
+                    'broadcaster_y': dock_y,
                     'communication_radius': comm_radius,
                     'initial_x': init_x,
                     'initial_y': init_y,
@@ -104,8 +123,10 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{
                     'use_sim_time': use_sim_time,
                     'robot_id': robot_name,
-                    'dock_x': dock_x,
-                    'dock_y': dock_y,
+                    'dock_x': rdock_x,
+                    'dock_y': rdock_y,
+                    'broadcaster_x': dock_x,
+                    'broadcaster_y': dock_y,
                     'communication_radius': comm_radius,
                     'initial_x': init_x,
                     'initial_y': init_y,
@@ -147,8 +168,10 @@ def launch_setup(context, *args, **kwargs):
                 parameters=[{
                     'use_sim_time': use_sim_time,
                     'robot_id': robot_name,
-                    'dock_x': dock_x,
-                    'dock_y': dock_y,
+                    'dock_x': rdock_x,
+                    'dock_y': rdock_y,
+                    'broadcaster_x': dock_x,
+                    'broadcaster_y': dock_y,
                     'communication_radius': comm_radius,
                     'initial_x': init_x,
                     'initial_y': init_y,

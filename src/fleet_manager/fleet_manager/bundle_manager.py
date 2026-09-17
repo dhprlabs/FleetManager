@@ -157,6 +157,8 @@ class BundleManager(Node):
         self.declare_parameter('service_time', 2.0)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('broadcaster_x', 5.0)
+        self.declare_parameter('broadcaster_y', 12.0)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -165,6 +167,8 @@ class BundleManager(Node):
         self.service_time = self.get_parameter('service_time').get_parameter_value().double_value
         self.dock_x = self.get_parameter('dock_x').get_parameter_value().double_value
         self.dock_y = self.get_parameter('dock_y').get_parameter_value().double_value
+        self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
+        self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
@@ -237,8 +241,8 @@ class BundleManager(Node):
         self.current_y = msg.pose.pose.position.y
 
     def _handle_task_pool(self, msg: TaskPool):
-        dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
-        if dist_to_dock > self.comm_radius:
+        dist_to_broadcaster = math.hypot(self.current_x - self.broadcaster_x, self.current_y - self.broadcaster_y)
+        if dist_to_broadcaster > self.comm_radius:
             return
         for t in msg.tasks:
             self._store_task_detail(t)

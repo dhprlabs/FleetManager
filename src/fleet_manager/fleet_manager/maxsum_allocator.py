@@ -203,13 +203,39 @@ class DynamicReallocationCoordinator:
         if new_avail:
             triggers.append((TRIGGER_NEW_TASK, new_avail))
 
-        # 3. Check for Task Completion boundary
+        # 3. Check for Task Completion boundary.
+        # When a task completes we must reallocate ALL currently unowned/available
+        # tasks, not just the completed one — the completed task is terminal so it
+        # would be silently dropped by build_affected_problem otherwise, leaving
+        # waiting tasks like T4 permanently unassigned.
         completed_tasks = []
         for tid, state in task_states.items():
             if state == Task.STATE_COMPLETED and self.last_known_task_states.get(tid) != Task.STATE_COMPLETED:
                 completed_tasks.append(tid)
         if completed_tasks:
-            triggers.append((TRIGGER_TASK_COMPLETED, completed_tasks))
+            # Collect all currently unowned tasks that are eligible for allocation
+            unassigned_avail = [
+                tid for tid, s in task_states.items()
+                if s in _ELIGIBLE_STATES and not task_owners.get(tid)
+            ]
+            # If there are unassigned tasks, trigger reallocation on them;
+            # otherwise still fire so robots can return to idle cleanly.
+            affected = unassigned_avail if unassigned_avail else completed_tasks
+            triggers.append((TRIGGER_TASK_COMPLETED, affected))
+
+        # 3b. Idle-robot safety trigger: if this robot has no owned tasks and
+        # unassigned available tasks exist, but TRIGGER_NEW_TASK never fires again
+        # (because last_known_task_states already has STATE_AVAILABLE), we inject
+        # a TRIGGER_NEW_TASK here so Max-Sum is always attempted for orphaned tasks.
+        own_tasks = [tid for tid, owner in task_owners.items() if owner == self.robot_id]
+        if not own_tasks and not completed_tasks:
+            orphan_avail = [
+                tid for tid, s in task_states.items()
+                if s in _ELIGIBLE_STATES and not task_owners.get(tid)
+                and tid not in self.last_known_task_owners
+            ]
+            if orphan_avail:
+                triggers.append((TRIGGER_NEW_TASK, orphan_avail))
 
         # 4. A late join rebids every synchronized, unstarted task.  This
         # includes queued ALLOCATED work, but never pickup/execution work.

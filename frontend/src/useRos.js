@@ -203,6 +203,16 @@ function getBridge() {
   return _bridge;
 }
 
+// ── Default Robot Spawn / Dock Positions ───────────────────────────────────
+export const DEFAULT_SPAWN_POSES = {
+  robot1:  { x: 7.7, y: 14.4 },
+  robot2:  { x: 3.4, y: 14.6 },
+  robot3:  { x: 4.3, y: 1.2 },
+  robot_1: { x: 7.7, y: 14.4 },
+  robot_2: { x: 3.4, y: 14.6 },
+  robot_3: { x: 4.3, y: 1.2 },
+};
+
 // ── Default Broadcaster / Dock Station Configuration ───────────────────────
 export const DEFAULT_DOCK_CONFIG = {
   rosX: 5.0,
@@ -218,6 +228,22 @@ export function useRos() {
   const [liveBundles, setLiveBundles] = useState({});      // robot_id → Bundle msg
   const [allocationEvents, setAllocationEvents] = useState([]);
   const [trafficEvents, setTrafficEvents] = useState([]);
+  // robot_id → array of {x,y} SVG waypoints from Nav2's /plan topic
+  const [navPaths, setNavPaths] = useState({});            // robot_id → [{x,y}]
+  // segment_id → {holder, state} from /fleet/reservations
+  const [liveReservations, setLiveReservations] = useState({});
+  const subscribedPlanTopicsRef = useRef(new Set());       // track which plan topics we've subscribed
+  const initialPosesRef = useRef({});
+
+  // Per-robot dock stations: initialized to each robot's initial/spawn pose
+  const [dockStations, setDockStations] = useState(() => {
+    const initial = {};
+    Object.entries(DEFAULT_SPAWN_POSES).forEach(([rid, pos]) => {
+      const svg = rosToSvg(pos.x, pos.y);
+      initial[rid] = { x: pos.x, y: pos.y, svgX: svg.x, svgY: svg.y };
+    });
+    return initial;
+  });
   const [liveAisles, setLiveAisles]       = useState(() => {
     try {
       const saved = localStorage.getItem('fleet_aisle_config');
@@ -274,6 +300,17 @@ export function useRos() {
         const qy = msg.current_pose?.pose?.orientation?.y ?? 0;
         const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
         const angleDeg = Math.round(-yaw * (180 / Math.PI));
+
+        const rx = msg.current_pose?.pose?.position?.x;
+        const ry = msg.current_pose?.pose?.position?.y;
+        if (rx !== undefined && ry !== undefined && !initialPosesRef.current[id]) {
+          initialPosesRef.current[id] = { x: rx, y: ry };
+          const initSvg = rosToSvg(rx, ry);
+          setDockStations((prev) => ({
+            ...prev,
+            [id]: { x: rx, y: ry, svgX: initSvg.x, svgY: initSvg.y },
+          }));
+        }
 
         map[id] = {
           id,
@@ -357,13 +394,30 @@ export function useRos() {
     const unsubTrafficEvents = bridge.subscribe('/fleet/traffic_events', (msg) => {
       try {
         const event = JSON.parse(msg.data);
-        setTrafficEvents((previous) => [...previous, event].slice(-20));
+        setTrafficEvents((previous) => [...previous, event].slice(-50));
       } catch {
         // Keep the dashboard usable if an individual diagnostic message is malformed.
       }
     });
 
-    // ── /fleet/world_views (cross-check task states from each robot) ─────
+    // ── /fleet/reservations (live aisle reservation grants) ──────────────
+    const unsubReservations = bridge.subscribe('/fleet/reservations', (msg) => {
+      // Reservation states: 0=requested,1=granted,2=active,3=released,4=waiting,5=expired,6=denied
+      const LIVE_STATES = new Set([1, 2]); // granted | active
+      const DONE_STATES = new Set([3, 5]); // released | expired
+      setLiveReservations((prev) => {
+        const next = { ...prev };
+        const segId = msg.segment_id;
+        if (!segId) return prev;
+        if (LIVE_STATES.has(msg.state)) {
+          next[segId] = { holder: msg.robot_id, state: msg.state };
+        } else if (DONE_STATES.has(msg.state)) {
+          if (next[segId]?.holder === msg.robot_id) delete next[segId];
+        }
+        return next;
+      });
+    });
+
     const unsubWV = bridge.subscribe('/fleet/world_views', (msg) => {
       let changed = false;
       (msg.task_states || []).forEach((t) => {
@@ -417,11 +471,37 @@ export function useRos() {
       unsubBundles();
       unsubDecisionLog();
       unsubTrafficEvents();
+      unsubReservations();
       unsubWV();
       unsubDock();
       unsubAisles();
     };
   }, [getRobotIndex]);
+
+  // ── Subscribe to Nav2 plan topics when new robots appear ─────────────────
+  // Nav2 publishes the planned global path on /{robot_id}/plan (nav_msgs/Path).
+  // We subscribe dynamically each time liveRobots changes so we don't miss
+  // robots that come online after the initial mount.
+  useEffect(() => {
+    if (!liveRobots) return;
+    const bridge = getBridge();
+    liveRobots.forEach(({ id }) => {
+      const topic = `/${id}/plan`;
+      if (subscribedPlanTopicsRef.current.has(topic)) return;
+      subscribedPlanTopicsRef.current.add(topic);
+      bridge.subscribe(topic, (msg) => {
+        // msg is nav_msgs/Path: { header, poses: [{header, pose}] }
+        const poses = msg.poses || [];
+        const svgPoints = poses
+          .filter((_, i) => i % 3 === 0)          // subsample every 3rd point for perf
+          .map((p) => rosToSvg(
+            p.pose?.position?.x ?? 0,
+            p.pose?.position?.y ?? 0,
+          ));
+        setNavPaths((prev) => ({ ...prev, [id]: svgPoints }));
+      });
+    });
+  }, [liveRobots]);
 
   // ── Broadcast staged batch of tasks to /fleet/broadcast_tasks ─────────────
   const broadcastTasks = useCallback((stagedTasks) => {
@@ -496,6 +576,9 @@ export function useRos() {
     liveBundles,
     allocationEvents,
     trafficEvents,
+    navPaths,
+    liveReservations,
+    dockStations,
     liveAisles,
     dockInfo,
     broadcastTasks,

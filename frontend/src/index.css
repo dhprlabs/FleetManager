@@ -51,6 +51,25 @@
 	}
 }
 
+/* ── Nav2 path marching-ants animation */
+@keyframes navPathMarch {
+	to {
+		stroke-dashoffset: -18;
+	}
+}
+
+/* ── ORCA avoidance pulse ring */
+@keyframes orcaPulse {
+	0%, 100% { r: 16; stroke-opacity: 0.75; }
+	50%       { r: 20; stroke-opacity: 0.35; }
+}
+
+/* ── PIBT wait blink */
+@keyframes pibtBlink {
+	0%, 49%  { stroke-opacity: 0.85; fill-opacity: 0.18; }
+	50%, 100% { stroke-opacity: 0.3;  fill-opacity: 0.05; }
+}
+
 * {
 	scrollbar-width: thin;
 	scrollbar-color: #c7cec9 transparent;

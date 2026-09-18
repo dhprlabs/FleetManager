@@ -625,6 +625,15 @@ function MapPanel({
         );
         zoomBy(event.deltaY > 0 ? 1.1 : 0.9, location.x, location.y);
     }
+
+    // Attach wheel listener with passive: false to allow preventDefault
+    useEffect(() => {
+        const svg = svgRef.current;
+        if (!svg) return;
+        svg.addEventListener('wheel', handleWheel, { passive: false });
+        return () => svg.removeEventListener('wheel', handleWheel, { passive: false });
+    }, []);
+
     function handlePointerMove(event) {
         const point = getMapPoint(event);
         setHoverMapPoint({ x: Math.round(point.x), y: Math.round(point.y) });
@@ -684,7 +693,6 @@ function MapPanel({
                 className={`block min-h-0 w-full flex-1 select-none bg-[#CFCFCF] ${aisleDrawingMode || selectionMode ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab"}`}
                 style={{ userSelect: "none" }}
                 viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
-                onWheel={handleWheel}
                 onPointerDown={(event) => {
                     setDrag({ startX: event.clientX, startY: event.clientY, viewBox });
                     event.currentTarget.setPointerCapture(event.pointerId);

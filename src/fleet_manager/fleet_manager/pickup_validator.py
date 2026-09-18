@@ -121,6 +121,16 @@ class PickupValidator(Node):
             obs.failure_reason = d.get('failure_reason', '')
             obs.confirmed_owner_id = d.get('confirmed_owner_id', '')
             obs.lamport_clock = d.get('lamport_clock', 0)
+            # Provide defaults for missing P2P fields
+            if 'observed_pose' in d:
+                # Reconstruct PoseStamped from dict if present
+                from geometry_msgs.msg import PoseStamped
+                obs.observed_pose = PoseStamped()
+                # Note: P2P payload may not have full pose, use zero pose as fallback
+            else:
+                from geometry_msgs.msg import PoseStamped
+                obs.observed_pose = PoseStamped()
+            obs.timestamp = self.get_clock().now().to_msg()
             self._handle_pickup_observation(obs)
         except Exception as e:
             self.get_logger().warn(f'[{self.robot_id}] [PICKUP_VAL] Error parsing P2P PICKUP_OBSERVATION: {e}')

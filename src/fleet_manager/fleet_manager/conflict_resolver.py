@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Set, Tuple
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from geometry_msgs.msg import Twist, PoseStamped, Point
     from nav_msgs.msg import Path
     from std_msgs.msg import String
@@ -60,8 +61,9 @@ except ImportError:
         def __init__(self): self.data = ''
 
 try:
-    from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS
+    from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS, ReservationManager
 except ImportError:
+    ReservationManager = None
     DEFAULT_AISLE_SEGMENTS = {
         'aisle_1': {'segment_id': 'aisle_1', 'x_min': 1.5, 'x_max': 4.0, 'y_min': 0.0, 'y_max': 2.5, 'is_single_lane': True},
         'aisle_2': {'segment_id': 'aisle_2', 'x_min': 1.5, 'x_max': 4.0, 'y_min': -3.5, 'y_max': -1.0, 'is_single_lane': True},
@@ -143,8 +145,8 @@ class ORCAEngine:
     Assumptions: Appropriate for open/multi-robot spaces.
     NOTE: Must be disabled inside single-lane aisles.
     """
-    def __init__(self, time_horizon: float = 3.0, robot_radius: float = 0.35,
-                 safety_margin: float = 0.15, max_speed: float = 0.6):
+    def __init__(self, time_horizon: float = 5.0, robot_radius: float = 0.35,
+                 safety_margin: float = 0.25, max_speed: float = 0.6):
         self.time_horizon = time_horizon
         self.robot_radius = robot_radius
         self.safety_margin = safety_margin
@@ -231,8 +233,8 @@ class ORCAEngine:
             result = Vector2(pref_vel.x, pref_vel.y)
 
         for i, plane in enumerate(planes):
-            # Check if current result satisfies constraint (with small positive cushion)
-            if (result - plane.point).dot(plane.normal) < 0.01:
+            # Check if current result satisfies constraint (with larger cushion for safety)
+            if (result - plane.point).dot(plane.normal) < 0.05:
                 # Project onto line: (v - point) . normal = 0
                 result = self._project_onto_line(planes[:i], plane, pref_vel)
 
@@ -300,14 +302,14 @@ class ORCAEngine:
         for n_pos, n_vel in neighbors:
             rel_pos = n_pos - robot_pos
             rel_dist = rel_pos.length()
-            if rel_dist > 4.5:
+            if rel_dist > 6.0:
                 continue
 
             # ── Emergency stop: within physical collision distance ─────────────
-            # Triggered when robots are within combined_radius*1.3 regardless of
+            # Triggered when robots are within combined_radius*1.1 regardless of
             # velocity direction.  This catches the same-direction trailing case
             # that standard ORCA cannot resolve (zero relative velocity → zero u).
-            if rel_dist < self.combined_radius * 1.3:
+            if rel_dist < self.combined_radius * 1.1:
                 emergency_stop = True
                 conflict_detected = True
                 continue
@@ -319,13 +321,13 @@ class ORCAEngine:
             # the ORCA constraint has something to work against.
             pref_len = pref_vel.length()
             rel_vel_direct = robot_vel - n_vel
-            same_dir_closing = (rel_dist < self.combined_radius * 2.5
-                                 and rel_vel_direct.length() < 0.06
+            same_dir_closing = (rel_dist < self.combined_radius * 3.0
+                                 and rel_vel_direct.length() < 0.08
                                  and pref_len > 0.02)
             if same_dir_closing:
                 # Perpendicular-right of current motion (port-starboard rule)
                 perp = Vector2(-pref_vel.y, pref_vel.x).normalized()
-                bias_strength = max(0.12, pref_len * 0.45)
+                bias_strength = max(0.2, pref_len * 0.6)
                 pref_vel = pref_vel + perp * bias_strength
                 if pref_vel.length() > self.max_speed:
                     pref_vel = pref_vel.normalized() * self.max_speed
@@ -333,13 +335,13 @@ class ORCAEngine:
 
             # Check if moving towards each other
             rel_vel = robot_vel - n_vel
-            is_closing = rel_pos.dot(rel_vel) > 0.0 or rel_dist < (self.combined_radius * 1.5)
+            is_closing = rel_pos.dot(rel_vel) > 0.0 or rel_dist < (self.combined_radius * 2.0)
 
             result = self.compute_orca_halfplane(robot_pos, robot_vel, n_pos, n_vel)
             if result is not None:
                 hp, u = result
                 # Active conflict if closing and correction vector u is non-zero
-                if is_closing and (u.length() > 0.05 or rel_dist < (self.combined_radius * 1.5)):
+                if is_closing and (u.length() > 0.03 or rel_dist < (self.combined_radius * 2.0)):
                     conflict_detected = True
                 planes.append(hp)
 
@@ -514,7 +516,7 @@ class ConflictCoordinator:
                  aging_rate: float = 0.5):
         self.robot_id = robot_id
         self.aisle_segments = aisle_segments or DEFAULT_AISLE_SEGMENTS
-        self.orca = ORCAEngine(time_horizon=3.0, robot_radius=0.35, safety_margin=0.15, max_speed=0.6)
+        self.orca = ORCAEngine(time_horizon=5.0, robot_radius=0.35, safety_margin=0.25, max_speed=0.6)
         self.pibt = PIBTEngine(aging_rate=aging_rate)
         self.pibt.register_agent(robot_id, base_priority=1.0)
 
@@ -558,11 +560,16 @@ class ConflictCoordinator:
                          nav2_pref_vel: Vector2,
                          peer_states: Dict[str, Tuple[Vector2, Vector2]],
                          active_reservation_holder: Optional[str] = None,
-                         dt: float = 0.1) -> Tuple[Optional[Vector2], bool, str]:
+                         dt: float = 0.1,
+                         respect_reservations: bool = True) -> Tuple[Optional[Vector2], bool, str]:
         """
         Main decision loop for physical conflict resolution.
         Returns:
           (override_vel, is_override_active, explanation_log)
+
+        respect_reservations=False bypasses all aisle logic (used by the node
+        when the robot is merely passing near an aisle its plan never enters);
+        open-space ORCA then handles collision avoidance instead.
         """
         my_agent = self.pibt.register_agent(self.robot_id)
 
@@ -576,15 +583,32 @@ class ConflictCoordinator:
             threshold=0.8
         )
 
-        if approaching_aisle:
+        if respect_reservations and approaching_aisle:
             # RULE 6: ORCA is EXPLICITLY DISABLED inside/near single-lane aisles.
             # Coordination relies strictly on Reservation Manager + PIBT.
             holder = active_reservation_holder
+            inside_aisle = aisle_id is not None
 
             if holder == self.robot_id:
                 self.is_waiting_at_choke = False
                 my_agent.reset_waiting()
                 return None, False, f"[{self.robot_id}] Aisle '{approaching_aisle}' reserved by self. ORCA disabled. Nav2 executes uninterrupted."
+
+            elif inside_aisle:
+                # Already inside a single-lane aisle but we no longer hold the
+                # grant (lease expired mid-traversal, or another robot was
+                # promoted).  We MUST stop and wait for the aisle to clear;
+                # proceeding would cause a head-on collision with the newly
+                # admitted robot.  The watchdog/renewal should have kept our
+                # lease alive, but if it failed we fall back to a safe stop.
+                self.is_waiting_at_choke = True
+                self.current_choke_segment = aisle_id
+                my_agent.record_waiting(dt)
+                override_vel = Vector2(0.0, 0.0)
+                who = holder if holder else 'untracked'
+                return override_vel, True, (f"[{self.robot_id}] Inside aisle '{aisle_id}' without held reservation "
+                                            f"(holder={who}). Lease lost mid-traversal — STOP to avoid collision. "
+                                            f"PIBT wait active.")
 
             elif holder is not None and holder != self.robot_id:
                 self.is_waiting_at_choke = True
@@ -599,33 +623,17 @@ class ConflictCoordinator:
                 return override_vel, True, log_msg
 
             else:
-                # No active holder yet: PIBT discrete ordering resolves contention
-                competing_peers = []
-                for p_id, (p_pos, _) in peer_states.items():
-                    if self.get_aisle_at_point(p_pos.x, p_pos.y, margin=1.0) == approaching_aisle:
-                        peer_agent = self.pibt.register_agent(p_id)
-                        competing_peers.append(peer_agent)
-
-                my_sort = my_agent.sort_key()
-                we_have_priority = True
-                for p_agent in competing_peers:
-                    if p_agent.sort_key() < my_sort:
-                        we_have_priority = False
-                        break
-
-                if we_have_priority:
-                    self.is_waiting_at_choke = False
-                    my_agent.reset_waiting()
-                    return None, False, (f"[{self.robot_id}] Contending for aisle '{approaching_aisle}': "
-                                         f"Highest PIBT priority ({my_agent.effective_priority:.2f}). "
-                                         f"Proceeding to enter reservation. ORCA disabled.")
-                else:
-                    self.is_waiting_at_choke = True
-                    my_agent.record_waiting(dt)
-                    override_vel = Vector2(0.0, 0.0)
-                    return override_vel, True, (f"[{self.robot_id}] Contending for aisle '{approaching_aisle}': "
-                                                f"Yielding to higher priority peer. Wait time {my_agent.wait_time:.1f}s. "
-                                                f"Velocity override: STOP.")
+                # No known holder: never enter a single-lane aisle before our
+                # reservation grant arrives over /fleet/reservations.  The
+                # ReservationManager is the single arbitration authority — a
+                # local PIBT guess cannot replace a confirmed grant.
+                self.is_waiting_at_choke = True
+                self.current_choke_segment = approaching_aisle
+                my_agent.record_waiting(dt)
+                override_vel = Vector2(0.0, 0.0)
+                return override_vel, True, (f"[{self.robot_id}] Awaiting reservation grant for aisle "
+                                            f"'{approaching_aisle}' (no holder recorded yet). "
+                                            f"ORCA disabled. Velocity override: STOP.")
 
         # ─────────────────────────────────────────────────────────────────────
         # Step 2: Open Space — Continuous ORCA Local Collision Avoidance
@@ -677,7 +685,25 @@ class ConflictResolver(Node):
         self.declare_parameter('aging_rate', 0.5)
         aging_rate = self.get_parameter('aging_rate').get_parameter_value().double_value
 
-        self.coordinator = ConflictCoordinator(robot_id=self.robot_id, aging_rate=aging_rate)
+        # Begin with exactly the layout used by ReservationManager.  Dynamic
+        # /fleet/aisle_config updates can still replace this, but startup must
+        # not depend on receiving a configuration message after subscribing.
+        self.declare_parameter(
+            'aisle_config_file',
+            '/home/mangal-devanshu/sih_ws/FleetManager/src/fleet_manager/config/aisle_segments.json'
+        )
+        aisle_config_file = self.get_parameter(
+            'aisle_config_file'
+        ).get_parameter_value().string_value
+        aisle_segments = (
+            ReservationManager.load_aisle_specs(aisle_config_file)
+            if ReservationManager is not None else dict(DEFAULT_AISLE_SEGMENTS)
+        )
+        self.coordinator = ConflictCoordinator(
+            robot_id=self.robot_id,
+            aisle_segments=aisle_segments,
+            aging_rate=aging_rate,
+        )
 
         self.peer_states: Dict[str, Tuple[Vector2, Vector2]] = {}
         self.my_pos = Vector2(0.0, 0.0)
@@ -686,6 +712,10 @@ class ConflictResolver(Node):
         self.active_reservations: Dict[str, str] = {}
         self._requested_aisles: Set[str] = set()
         self._reservation_clock = 0
+        self._last_reservation_renewal: Dict[str, float] = {}
+        self.declare_parameter('reservation_renewal_sec', 2.0)
+        self.reservation_renewal_sec = self.get_parameter(
+            'reservation_renewal_sec').get_parameter_value().double_value
         self._last_traffic_state = ''
         # Guard: do not attempt aisle reservations until at least one Nav2
         # plan has been received.  Without this, proximity checks fire on
@@ -704,8 +734,18 @@ class ConflictResolver(Node):
         self.nav2_cmd_sub = self.create_subscription(
             Twist, 'cmd_vel_nav', self.handle_nav2_cmd, 10
         )
+        # ReservationManager publishes the authoritative aisle map once at
+        # startup, before this node is normally constructed.  This must be a
+        # transient-local subscription or the resolver retains its stale
+        # fallback layout and never detects the configured aisle on approach.
+        aisle_config_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
         self.aisle_config_sub = self.create_subscription(
-            String, '/fleet/aisle_config', self.handle_aisle_config, 10
+            String, '/fleet/aisle_config', self.handle_aisle_config,
+            aisle_config_qos
         )
         # Fix 2: Subscribe to this robot's Nav2 global plan to do path-based
         # aisle reservation instead of proximity-only.
@@ -720,6 +760,9 @@ class ConflictResolver(Node):
         # when physical coordination requires it.
         self.drive_pub = self.create_publisher(Twist, 'cmd_vel', 10)
         self.reservation_request_pub = self.create_publisher(Reservation, '/traffic/reserve', 10)
+        self.fleet_res_pub = self.create_publisher(Reservation, '/fleet/reservations', 10)
+        self.reservation_release_pub = self.create_publisher(Reservation, '/traffic/release', 10)
+        self.fleet_release_pub = self.create_publisher(Reservation, '/fleet/reservations', 10)
         self.traffic_event_pub = self.create_publisher(String, '/fleet/traffic_events', 50)
         self.override_pub = self.create_publisher(Twist, '/cmd_vel_override', 10)
         self.local_override_pub = self.create_publisher(Twist, 'cmd_vel_override', 10)
@@ -741,20 +784,35 @@ class ConflictResolver(Node):
     def handle_aisle_config(self, msg: String):
         try:
             payload = json.loads(msg.data)
-            aisles_raw = payload.get('aisles', [])
+            raw_aisles = payload.get('aisles', payload)
             new_segments = {}
-            for item in aisles_raw:
-                seg_id = item.get('segment_id') or item.get('id')
-                if not seg_id:
-                    continue
-                new_segments[seg_id] = {
-                    'segment_id': seg_id,
-                    'x_min': float(item['x_min']),
-                    'x_max': float(item['x_max']),
-                    'y_min': float(item['y_min']),
-                    'y_max': float(item['y_max']),
-                    'is_single_lane': bool(item.get('is_single_lane', True)),
-                }
+
+            if isinstance(raw_aisles, dict):
+                # Dict format: {segment_id: {x_min, x_max, y_min, y_max, ...}}
+                for seg_id, spec in raw_aisles.items():
+                    new_segments[seg_id] = {
+                        'segment_id': seg_id,
+                        'x_min': float(spec.get('x_min', 0.0)),
+                        'x_max': float(spec.get('x_max', 0.0)),
+                        'y_min': float(spec.get('y_min', 0.0)),
+                        'y_max': float(spec.get('y_max', 0.0)),
+                        'is_single_lane': bool(spec.get('is_single_lane', True)),
+                    }
+            elif isinstance(raw_aisles, list):
+                # List format: [{segment_id, x_min, x_max, y_min, y_max, ...}, ...]
+                for item in raw_aisles:
+                    seg_id = item.get('segment_id') or item.get('id')
+                    if not seg_id:
+                        continue
+                    new_segments[seg_id] = {
+                        'segment_id': seg_id,
+                        'x_min': float(item.get('x_min', 0.0)),
+                        'x_max': float(item.get('x_max', 0.0)),
+                        'y_min': float(item.get('y_min', 0.0)),
+                        'y_max': float(item.get('y_max', 0.0)),
+                        'is_single_lane': bool(item.get('is_single_lane', True)),
+                    }
+
             if new_segments:
                 self.coordinator.aisle_segments = new_segments
                 self.get_logger().info(f"[{self.robot_id}] Updated aisle segments configuration ({len(new_segments)} aisles).")
@@ -774,13 +832,22 @@ class ConflictResolver(Node):
         self.nav2_pref_vel = Vector2(msg.linear.x, msg.linear.y)
 
     def handle_plan(self, msg: 'Path'):
-        """Cache Nav2 global plan waypoints for path-based aisle reservation."""
+        """Cache a Nav2 route and reserve its first single-lane aisle early."""
         self._nav_plan_waypoints = [
             (p.pose.position.x, p.pose.position.y)
             for p in (msg.poses or [])
         ]
         if self._nav_plan_waypoints:
             self._plan_received = True
+            # A route, rather than just proximity to an entrance, tells us
+            # which choke point the robot is committed to using.  Claim the
+            # first aisle on that route now; later aisles remain available
+            # until the robot approaches them, avoiding speculative locks.
+            for x, y in self._nav_plan_waypoints:
+                segment_id = self.coordinator.get_aisle_at_point(x, y)
+                if segment_id:
+                    self._request_approaching_aisle(segment_id)
+                    break
 
     def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 0.15) -> bool:
         """
@@ -808,8 +875,10 @@ class ConflictResolver(Node):
         """Request each approach once; ReservationManager owns arbitration."""
         if segment_id in self._requested_aisles:
             return
-        # Fix 2: Only request if our Nav2 plan actually passes through the aisle.
-        if not self._plan_passes_through_aisle(segment_id):
+        # Gate on the Nav2 plan once one exists.  Before the first plan
+        # arrives we still request so the grant can land before the robot
+        # reaches the aisle (the robot waits outside until granted anyway).
+        if self._plan_received and not self._plan_passes_through_aisle(segment_id):
             self.get_logger().debug(
                 f'[{self.robot_id}] [TRAFFIC] Skipping reservation for {segment_id}: '
                 f'Nav2 plan does not pass through this aisle.'
@@ -817,19 +886,92 @@ class ConflictResolver(Node):
             return
         self._requested_aisles.add(segment_id)
         self._reservation_clock += 1
+        spec = self.coordinator.aisle_segments.get(segment_id, {})
+        x_min = spec.get('x_min', 0.0)
+        x_max = spec.get('x_max', 0.0)
+        y_min = spec.get('y_min', 0.0)
+        y_max = spec.get('y_max', 0.0)
         request = Reservation()
         request.reservation_id = f'{self.robot_id}:{segment_id}:{self._reservation_clock}'
         request.robot_id = self.robot_id
         request.segment_id = segment_id
+        request.task_id = ''  # filled by nav2_bridge when task starts
         request.state = Reservation.STATE_REQUESTED
         request.lamport_clock = self._reservation_clock
         request.priority = 1
         request.request_time = self.get_clock().now().to_msg()
+        request.start_time = self.get_clock().now().to_msg()
+        request.end_time = self.get_clock().now().to_msg()
+        request.expiry_time = self.get_clock().now().to_msg()
+        request.zone_min.x = float(x_min)
+        request.zone_min.y = float(y_min)
+        request.zone_min.z = 0.0
+        request.zone_max.x = float(x_max)
+        request.zone_max.y = float(y_max)
+        request.zone_max.z = 0.0
         self.reservation_request_pub.publish(request)
+        self.fleet_res_pub.publish(request)
         self._publish_traffic_event('reservation_requested', segment_id=segment_id)
         self.get_logger().info(
             f'[{self.robot_id}] [TRAFFIC] Requested reservation for {segment_id}.'
         )
+
+    def _release_aisle_reservation(self, segment_id: str):
+        """Release reservation for an aisle segment."""
+        self._reservation_clock += 1
+        spec = self.coordinator.aisle_segments.get(segment_id, {})
+        x_min = spec.get('x_min', 0.0)
+        x_max = spec.get('x_max', 0.0)
+        y_min = spec.get('y_min', 0.0)
+        y_max = spec.get('y_max', 0.0)
+        release = Reservation()
+        release.reservation_id = f'{self.robot_id}:{segment_id}:release:{self._reservation_clock}'
+        release.robot_id = self.robot_id
+        release.segment_id = segment_id
+        release.state = Reservation.STATE_RELEASED
+        release.lamport_clock = self._reservation_clock
+        release.zone_min.x = float(x_min)
+        release.zone_min.y = float(y_min)
+        release.zone_min.z = 0.0
+        release.zone_max.x = float(x_max)
+        release.zone_max.y = float(y_max)
+        release.zone_max.z = 0.0
+        self.reservation_release_pub.publish(release)
+        self.fleet_release_pub.publish(release)
+        self._publish_traffic_event('reservation_released', segment_id=segment_id)
+        self.get_logger().info(
+            f'[{self.robot_id}] [TRAFFIC] Released reservation for {segment_id}.'
+        )
+        # Clear from requested set so it can be re-requested if needed
+        self._requested_aisles.discard(segment_id)
+        self._last_reservation_renewal.pop(segment_id, None)
+
+    def _renew_aisle_reservation(self, segment_id: str, now: float):
+        """Keep a granted aisle lease alive while the holder is traversing it.
+
+        Uses time.monotonic() for the renewal interval to match the watchdog's
+        time base in the reservation manager.
+        """
+        if self.active_reservations.get(segment_id) != self.robot_id:
+            return
+        # Use monotonic time for renewal interval to match watchdog time base
+        mono_now = time.monotonic()
+        if mono_now - self._last_reservation_renewal.get(segment_id, 0.0) < self.reservation_renewal_sec:
+            return
+
+        self._reservation_clock += 1
+        renewal = Reservation()
+        renewal.reservation_id = f'{self.robot_id}:{segment_id}:renew:{self._reservation_clock}'
+        renewal.robot_id = self.robot_id
+        renewal.segment_id = segment_id
+        renewal.state = Reservation.STATE_ACTIVE
+        renewal.lamport_clock = self._reservation_clock
+        renewal.priority = 1
+        renewal.request_time = self.get_clock().now().to_msg()
+        self.reservation_request_pub.publish(renewal)
+        self.fleet_res_pub.publish(renewal)
+        self._last_reservation_renewal[segment_id] = mono_now
+        self._publish_traffic_event('reservation_renewed', segment_id=segment_id)
 
     def _publish_traffic_event(self, event: str, **details):
         record = audit_event(self.get_logger(), 'conflict_resolver', event, self.robot_id, **details)
@@ -842,6 +984,81 @@ class ConflictResolver(Node):
         dt = max(0.01, min(0.5, now - self.last_step_time))
         self.last_step_time = now
 
+        # ─────────────────────────────────────────────────────────────────────
+        # SESSION LOGGING: Track robot position, aisle state, and velocities
+        # ─────────────────────────────────────────────────────────────────────
+        aisle_id = self.coordinator.is_in_single_lane_aisle(self.my_pos)
+        approaching_aisle = aisle_id or self.coordinator.is_approaching_aisle(
+            self.my_pos, self.my_pos + self.nav2_pref_vel * 2.0, threshold=0.8
+        )
+
+        # Plan-awareness: does our Nav2 plan actually enter the detected aisle?
+        # A robot merely passing NEAR an aisle its plan never enters must
+        # neither reserve it nor stop because another robot holds it.
+        plan_enters_aisle = (
+            self._plan_passes_through_aisle(approaching_aisle)
+            if approaching_aisle else False
+        )
+        # Respect reservation logic when: inside the aisle, the plan enters
+        # it, or no plan has arrived yet (conservatively hold position while
+        # Nav2 is still computing the first plan for a new goal).
+        respect_reservations = (
+            approaching_aisle is not None
+            and (aisle_id is not None or plan_enters_aisle or not self._plan_received)
+        )
+
+        if aisle_id:
+            self._renew_aisle_reservation(aisle_id, now)
+
+        # Release self-held reservations our current plan no longer needs
+        # (e.g. Nav2 re-planned away from the aisle after we were granted).
+        if self._plan_received:
+            for seg_id, holder_id in list(self.active_reservations.items()):
+                if holder_id != self.robot_id or seg_id == aisle_id:
+                    continue
+                if not self._plan_passes_through_aisle(seg_id, inflation=0.3):
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [TRAFFIC] Plan no longer enters {seg_id}; '
+                        f'releasing moot reservation.'
+                    )
+                    self._release_aisle_reservation(seg_id)
+        
+        # Log position and aisle state changes
+        if not hasattr(self, '_last_aisle_state'):
+            self._last_aisle_state = None
+            self._last_position_log = 0
+            self._last_in_aisle = None
+        
+        # Log position every 2 seconds or on aisle state change
+        position_changed = (now - self._last_position_log) > 2.0
+        aisle_state_changed = approaching_aisle != self._last_aisle_state
+        
+        # Auto-release reservation when exiting an aisle
+        if self._last_in_aisle is not None and aisle_id != self._last_in_aisle:
+            if self.active_reservations.get(self._last_in_aisle) == self.robot_id:
+                self._release_aisle_reservation(self._last_in_aisle)
+        
+        if position_changed or aisle_state_changed:
+            self._last_position_log = now
+            self.get_logger().info(
+                f'[{self.robot_id}] [SESSION] pos=({self.my_pos.x:.2f},{self.my_pos.y:.2f}) '
+                f'vel=({self.my_vel.x:.2f},{self.my_vel.y:.2f}) '
+                f'pref_vel=({self.nav2_pref_vel.x:.2f},{self.nav2_pref_vel.y:.2f}) '
+                f'in_aisle={aisle_id} approaching={approaching_aisle} '
+                f'active_reservations={dict(self.active_reservations)}'
+            )
+            if aisle_state_changed:
+                self._publish_traffic_event('aisle_state_change',
+                    segment_id=approaching_aisle or '',
+                    in_aisle=aisle_id,
+                    approaching=approaching_aisle,
+                    pos_x=round(self.my_pos.x, 2),
+                    pos_y=round(self.my_pos.y, 2)
+                )
+            self._last_aisle_state = approaching_aisle
+        
+        self._last_in_aisle = aisle_id
+
         # Skip all conflict resolution when the robot is genuinely stationary:
         # both Nav2 command and observed velocity below noise floor.  This
         # prevents ORCA from activating while robots idle at the dock and stops
@@ -849,7 +1066,7 @@ class ConflictResolver(Node):
         if self.nav2_pref_vel.length() < 0.02 and self.my_vel.length() < 0.02:
             if self._last_traffic_state:
                 self.get_logger().info(
-                    f'[{self.robot_id}] Robot stationary — conflict resolution paused.'
+                    f'[{self.robot_id}] [SESSION] Robot stationary — conflict resolution paused.'
                 )
                 self._last_traffic_state = ''
             # Still forward the zero command so the robot does not drift
@@ -857,16 +1074,13 @@ class ConflictResolver(Node):
             self.drive_pub.publish(twist_msg)
             return
 
-        aisle_id = self.coordinator.is_in_single_lane_aisle(self.my_pos)
-        approaching_aisle = aisle_id or self.coordinator.is_approaching_aisle(
-            self.my_pos, self.my_pos + self.nav2_pref_vel * 2.0, threshold=0.5
-        )
-        if approaching_aisle:
+        if respect_reservations:
             self._request_approaching_aisle(approaching_aisle)
         else:
             # A later approach may be a new traversal and needs a fresh grant.
             self._requested_aisles.clear()
-        holder = self.active_reservations.get(approaching_aisle) if approaching_aisle else None
+        holder = (self.active_reservations.get(approaching_aisle)
+                  if respect_reservations and approaching_aisle else None)
 
         override_vel, is_active, log_msg = self.coordinator.compute_override(
             my_pos=self.my_pos,
@@ -874,7 +1088,8 @@ class ConflictResolver(Node):
             nav2_pref_vel=self.nav2_pref_vel,
             peer_states=self.peer_states,
             active_reservation_holder=holder,
-            dt=dt
+            dt=dt,
+            respect_reservations=respect_reservations
         )
 
         selected_vel = override_vel if is_active and override_vel is not None else self.nav2_pref_vel

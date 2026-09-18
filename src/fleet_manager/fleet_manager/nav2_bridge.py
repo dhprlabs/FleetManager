@@ -48,6 +48,7 @@ from fleet_interfaces.msg import (
     WorldView,
 )
 from fleet_manager.p2p_client import P2PClient
+from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS
 
 
 class TaskExecutionState(Enum):
@@ -206,13 +207,35 @@ class TaskExecutionManager(Node):
         # Phase 12 traffic reservation interfaces
         self.traffic_reserve_pub = self.create_publisher(Reservation, '/traffic/reserve', 10)
         self.traffic_release_pub = self.create_publisher(Reservation, '/traffic/release', 10)
+        self.fleet_res_pub = self.create_publisher(Reservation, '/fleet/reservations', 10)
         self.traffic_reserve_sub = self.create_subscription(
             Reservation, '/traffic/reserve', self._handle_traffic_reserve_msg, 10
         )
         self._current_held_aisle: Optional[str] = None
 
+        # Aisle configuration for session logging
+        self._aisle_segments = DEFAULT_AISLE_SEGMENTS
+        self._last_aisle_log_time = 0.0
+        self._last_aisle_state = None
+
         # Execution evaluation timer
         self.eval_timer = self.create_timer(0.5, self._eval_execution_step)
+
+    def _get_aisle_at_point(self, x: float, y: float) -> Optional[str]:
+        """Check if a point is inside any single-lane aisle segment."""
+        for seg_id, spec in self._aisle_segments.items():
+            if (spec['x_min'] <= x <= spec['x_max'] and
+                spec['y_min'] <= y <= spec['y_max'] and
+                spec.get('is_single_lane', True)):
+                return seg_id
+        return None
+
+    def _get_aisle_bounds(self, segment_id: str) -> Optional[Tuple[float, float, float, float]]:
+        """Get aisle bounds (x_min, x_max, y_min, y_max)."""
+        spec = self._aisle_segments.get(segment_id)
+        if spec:
+            return (spec['x_min'], spec['x_max'], spec['y_min'], spec['y_max'])
+        return None
 
         self.get_logger().info(
             f'[{self.robot_id}] Task Execution Manager active | '
@@ -725,12 +748,18 @@ class TaskExecutionManager(Node):
         if self._current_held_aisle:
             seg = self._current_held_aisle
             self._current_held_aisle = None
+            # Unique id per release: peers dedupe by reservation_id, so a
+            # constant id would silently drop every release after the first.
+            now_sec = self.get_clock().now().nanoseconds / 1e9
             res = Reservation()
-            res.reservation_id = f"{self.robot_id}:{seg}:release"
+            res.reservation_id = f"{self.robot_id}:{seg}:release:{now_sec:.3f}"
             res.robot_id = self.robot_id
             res.segment_id = seg
             res.state = Reservation.STATE_RELEASED
             self.traffic_release_pub.publish(res)
+            # ConflictResolver tracks holder state on the fleet topic; mirror
+            # the release so all safety layers converge on the same lifecycle.
+            self.fleet_res_pub.publish(res)
             self.get_logger().info(f'[{self.robot_id}] [TRAFFIC] Released aisle reservation for {seg}.')
 
     def _release_task_ownership(self, task_id: str):
@@ -1048,6 +1077,34 @@ class TaskExecutionManager(Node):
 
         if not self.active_task_id or not self.active_task_info:
             return
+
+        # ─────────────────────────────────────────────────────────────────────
+        # SESSION LOGGING: Aisle entry/exit detection
+        # ─────────────────────────────────────────────────────────────────────
+        current_aisle = self._get_aisle_at_point(self.current_x, self.current_y)
+        now = time.monotonic()
+        
+        # Log aisle state changes
+        if current_aisle != self._last_aisle_state:
+            self.get_logger().info(
+                f'[{self.robot_id}] [SESSION] Aisle change: {self._last_aisle_state} -> {current_aisle} '
+                f'at pos=({self.current_x:.2f},{self.current_y:.2f}) '
+                f'task={self.active_task_id} state={self.execution_state.value}'
+            )
+            self._last_aisle_state = current_aisle
+
+        # Periodic position log every 3 seconds when in an aisle
+        if current_aisle and (now - self._last_aisle_log_time) > 3.0:
+            self._last_aisle_log_time = now
+            bounds = self._get_aisle_bounds(current_aisle)
+            if bounds:
+                self.get_logger().info(
+                    f'[{self.robot_id}] [SESSION] In aisle {current_aisle} '
+                    f'bounds=({bounds[0]:.1f},{bounds[1]:.1f},{bounds[2]:.1f},{bounds[3]:.1f}) '
+                    f'pos=({self.current_x:.2f},{self.current_y:.2f}) '
+                    f'task={self.active_task_id} state={self.execution_state.value} '
+                    f'held_aisle={self._current_held_aisle}'
+                )
 
         # ── Active task proximity watchdog ────────────────────────────────────
         if self.execution_state == TaskExecutionState.DELIVERING:

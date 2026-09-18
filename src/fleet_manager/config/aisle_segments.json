@@ -1,29 +1,42 @@
 {
   "aisle_1": {
+    "id": "aisle_1",
     "segment_id": "aisle_1",
-    "x_min": 1.5,
-    "x_max": 4.0,
-    "y_min": 0.0,
-    "y_max": 2.5,
-    "is_single_lane": true,
-    "description": "Main picking aisle 1 (narrow single lane)"
+    "name": "Aisle 1",
+    "x_min": 4.493,
+    "x_max": 5.743,
+    "y_min": 7.521,
+    "y_max": 12.271,
+    "is_single_lane": true
   },
   "aisle_2": {
+    "id": "aisle_2",
     "segment_id": "aisle_2",
-    "x_min": 1.5,
-    "x_max": 4.0,
-    "y_min": -3.5,
-    "y_max": -1.0,
-    "is_single_lane": true,
-    "description": "Main picking aisle 2 (narrow single lane)"
+    "name": "Aisle 2",
+    "x_min": -2.257,
+    "x_max": 1.593,
+    "y_min": 5.721,
+    "y_max": 6.171,
+    "is_single_lane": true
   },
   "aisle_3": {
+    "id": "aisle_3",
     "segment_id": "aisle_3",
-    "x_min": -4.5,
-    "x_max": -2.0,
-    "y_min": -2.0,
-    "y_max": 2.0,
-    "is_single_lane": true,
-    "description": "Dropoff transit corridor (narrow single lane)"
+    "name": "Aisle 3",
+    "x_min": 7.443,
+    "x_max": 11.543,
+    "y_min": -6.829,
+    "y_max": -6.229,
+    "is_single_lane": true
+  },
+  "aisle_4": {
+    "id": "aisle_4",
+    "segment_id": "aisle_4",
+    "name": "Aisle 4",
+    "x_min": 15.493,
+    "x_max": 16.643,
+    "y_min": -3.129,
+    "y_max": 1.521,
+    "is_single_lane": true
   }
 }

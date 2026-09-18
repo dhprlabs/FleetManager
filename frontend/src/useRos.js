@@ -105,6 +105,7 @@ const STATE_LABELS = {
   5: 'Cancelled',
   6: 'Pickup done',
   7: 'Delivering',
+  8: 'Blocked',
 };
 
 const TASK_STATE_RANK = {
@@ -422,7 +423,21 @@ export function useRos() {
       let changed = false;
       (msg.task_states || []).forEach((t) => {
         const existing = taskMapRef.current[t.task_id];
-        if (!existing || getTaskRank(t.state) >= getTaskRank(existing.state)) {
+        const incomingRank = getTaskRank(t.state);
+        const existingRank = existing ? getTaskRank(existing.state) : -1;
+        // Accept the world-view update if:
+        //   a) The incoming state rank is strictly higher (task progressed), OR
+        //   b) The incoming update has an assigned robot and the existing does
+        //      not (ownership newly confirmed).  This prevents a local robot's
+        //      unconfirmed "I'm looking at this task" state from overwriting the
+        //      global authoritative assignment from a peer.
+        const incomingHasRobot = Boolean(t.assigned_robot_id);
+        const existingHasRobot = Boolean(existing?.assigned_robot_id);
+        const shouldAccept =
+          !existing ||
+          incomingRank > existingRank ||
+          (incomingRank === existingRank && incomingHasRobot && !existingHasRobot);
+        if (shouldAccept) {
           taskMapRef.current[t.task_id] = t;
           changed = true;
         }
@@ -602,7 +617,8 @@ function _flushTasks(setter, taskMap) {
       robot: t.assigned_robot_id || null,
       progress: taskProgress(t.state ?? 0),
       state: t.state ?? 0,
-      stateLabel: STATE_LABELS[t.state ?? 0] ?? 'Unknown',
+      // Never show 'Unknown' — fall back to 'Available' for any unrecognised state.
+      stateLabel: STATE_LABELS[t.state] ?? STATE_LABELS[0],
       start: svgStart,
       end: svgEnd,
     };

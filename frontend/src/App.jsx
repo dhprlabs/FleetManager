@@ -1218,6 +1218,7 @@ function MapPanel({
 
 function TaskStatusPanel({
     tasks,
+    robots = [],
     stagedTasks = [],
     selectionMode,
     onAdd,
@@ -1228,8 +1229,19 @@ function TaskStatusPanel({
     onRemoveStaged,
     onClearStaged,
 }) {
-    const onTimeCompletion = tasks.length
-        ? Math.round(tasks.reduce((total, task) => total + task.progress, 0) / tasks.length)
+    // ── Local / Global view toggle ─────────────────────────────────────────
+    // 'global' = show all fleet tasks; any robot id = filter to that robot only.
+    const [viewMode, setViewMode] = useState('global');
+
+    const robotIds = robots.map((r) => r.id);
+
+    // Compute display tasks based on current view mode
+    const displayTasks = viewMode === 'global'
+        ? tasks
+        : tasks.filter((t) => t.robot === viewMode);
+
+    const onTimeCompletion = displayTasks.length
+        ? Math.round(displayTasks.reduce((total, task) => total + task.progress, 0) / displayTasks.length)
         : 0;
     return (
         <section className="flex max-h-[360px] w-full flex-none flex-col border-t border-[#c4cbc5] bg-white md:max-h-none md:w-[280px] md:border-l md:border-t-0 md:border-[#c4cbc5] xl:w-[350px]">
@@ -1309,21 +1321,67 @@ function TaskStatusPanel({
                 </div>
             )}
 
-            <div className="border-b border-[#eceee9] px-[16px] pb-2 pt-1 flex items-baseline justify-between">
-                <span className="text-[12px] font-semibold text-[#6b776f]">Fleet Task Pool</span>
-                <div className="flex items-baseline gap-1.5">
-                    <span className="font-bold text-[13px] text-[#2f6f5e]">{onTimeCompletion}%</span>
-                    <span className="text-[10.5px] text-[#8e988f]">completion</span>
+            {/* ── View mode toggle tabs ─────────────────────────────────────── */}
+            <div className="border-b border-[#eceee9] px-[16px] pb-2 pt-1">
+                <div className="flex items-center justify-between">
+                    <span className="text-[12px] font-semibold text-[#6b776f]">
+                        {viewMode === 'global' ? 'Fleet Task Pool' : `${viewMode} — local view`}
+                    </span>
+                    <div className="flex items-baseline gap-1.5">
+                        <span className="font-bold text-[13px] text-[#2f6f5e]">{onTimeCompletion}%</span>
+                        <span className="text-[10.5px] text-[#8e988f]">completion</span>
+                    </div>
+                </div>
+                {/* Tab strip */}
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                    <button
+                        id="task-view-global"
+                        onClick={() => setViewMode('global')}
+                        className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
+                            viewMode === 'global'
+                                ? 'bg-[#2f6f5e] text-white'
+                                : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
+                        }`}
+                    >
+                        Global
+                    </button>
+                    {robotIds.map((rid) => (
+                        <button
+                            key={rid}
+                            id={`task-view-${rid}`}
+                            onClick={() => setViewMode(rid)}
+                            className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
+                                viewMode === rid
+                                    ? 'bg-[#3978b7] text-white'
+                                    : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
+                            }`}
+                        >
+                            {rid}
+                        </button>
+                    ))}
                 </div>
             </div>
 
             <div className="flex-1 overflow-y-auto px-3.5 py-2">
-                {tasks.length === 0 && (
-                    <div className="py-6 text-center text-xs text-[#8e988f]">
-                        No active tasks in pool. Stage tasks above and click <b>Broadcast</b>.
+                {/* Local-view banner */}
+                {viewMode !== 'global' && (
+                    <div className="mb-2 flex items-center gap-1.5 rounded-[7px] border border-[#3978b7]/25 bg-[#eaf2fb] px-2.5 py-1.5 text-[10.5px] text-[#2d618f]">
+                        <svg viewBox="0 0 24 24" className="h-3 w-3 flex-none" fill="none">
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8"/>
+                            <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                        </svg>
+                        <span>Showing <b>{viewMode}</b>'s tasks from global CRDT view</span>
                     </div>
                 )}
-                {[...tasks].reverse().map((task, index) => (
+                {displayTasks.length === 0 && (
+                    <div className="py-6 text-center text-xs text-[#8e988f]">
+                        {viewMode === 'global'
+                            ? <span>No active tasks in pool. Stage tasks above and click <b>Broadcast</b>.</span>
+                            : <span>No tasks assigned to <b>{viewMode}</b> yet.</span>
+                        }
+                    </div>
+                )}
+                {[...displayTasks].reverse().map((task, index) => (
                     <div
                         className="mb-2 rounded-[9px] border border-[#eceee9] bg-[#f7f8f6] p-[10px_11px]"
                         key={`${task.name}-${index}`}
@@ -2495,6 +2553,7 @@ function App() {
                     />
                     <TaskStatusPanel
                         tasks={tasks}
+                        robots={robots}
                         stagedTasks={stagedTasks}
                         selectionMode={selectionMode}
                         onAdd={startTaskSelection}

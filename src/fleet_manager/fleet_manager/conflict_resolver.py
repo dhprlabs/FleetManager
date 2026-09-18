@@ -687,6 +687,10 @@ class ConflictResolver(Node):
         self._requested_aisles: Set[str] = set()
         self._reservation_clock = 0
         self._last_traffic_state = ''
+        # Guard: do not attempt aisle reservations until at least one Nav2
+        # plan has been received.  Without this, proximity checks fire on
+        # startup / between goals and create phantom reservations.
+        self._plan_received: bool = False
 
         self.intent_sub = self.create_subscription(
             Intent, '/fleet/intents', self.handle_intent, 10
@@ -775,17 +779,19 @@ class ConflictResolver(Node):
             (p.pose.position.x, p.pose.position.y)
             for p in (msg.poses or [])
         ]
+        if self._nav_plan_waypoints:
+            self._plan_received = True
 
     def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 0.15) -> bool:
         """
         Returns True if any waypoint in the cached Nav2 plan falls inside the
         given aisle segment (with an optional inflation margin).
-        Falls back to True (allow reservation) if no plan is cached yet.
+        Returns False when no plan has been received yet — this prevents phantom
+        reservations during startup or between goal submissions.
         """
-        if not self._nav_plan_waypoints:
-            # No plan available yet — fall back to proximity-based behaviour
-            # so we don't block legitimate reservations on startup.
-            return True
+        if not self._plan_received or not self._nav_plan_waypoints:
+            # No plan available yet — refuse reservation to avoid ghost bookings.
+            return False
         spec = self.coordinator.aisle_segments.get(seg_id)
         if spec is None:
             return True
@@ -836,9 +842,24 @@ class ConflictResolver(Node):
         dt = max(0.01, min(0.5, now - self.last_step_time))
         self.last_step_time = now
 
+        # Skip all conflict resolution when the robot is genuinely stationary:
+        # both Nav2 command and observed velocity below noise floor.  This
+        # prevents ORCA from activating while robots idle at the dock and stops
+        # spurious aisle reservations between navigation goals.
+        if self.nav2_pref_vel.length() < 0.02 and self.my_vel.length() < 0.02:
+            if self._last_traffic_state:
+                self.get_logger().info(
+                    f'[{self.robot_id}] Robot stationary — conflict resolution paused.'
+                )
+                self._last_traffic_state = ''
+            # Still forward the zero command so the robot does not drift
+            twist_msg = Twist()
+            self.drive_pub.publish(twist_msg)
+            return
+
         aisle_id = self.coordinator.is_in_single_lane_aisle(self.my_pos)
         approaching_aisle = aisle_id or self.coordinator.is_approaching_aisle(
-            self.my_pos, self.my_pos + self.nav2_pref_vel * 2.0, threshold=0.8
+            self.my_pos, self.my_pos + self.nav2_pref_vel * 2.0, threshold=0.5
         )
         if approaching_aisle:
             self._request_approaching_aisle(approaching_aisle)

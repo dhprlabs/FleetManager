@@ -473,22 +473,16 @@ class TaskExecutionManager(Node):
             )
             self._confirm_pickup()
         else:
+            # Item absent at pickup: the item was taken or was never here.
+            # Release ownership so Max-Sum can re-bid the task.  Do NOT mark
+            # STATE_COMPLETED — that would permanently remove the task from
+            # the pool.  Instead broadcast STATE_AVAILABLE so the task goes
+            # back into contention.
             self.get_logger().warn(
                 f'[{self.robot_id}] ✗ Phase 11: Item ABSENT at pickup for task '
-                f'{self.active_task_id}. Marked as COMPLETED by other entity.'
+                f'{self.active_task_id}. Releasing for re-bid.'
             )
-            task_id = self.active_task_id
-            cached = self._world_view_task_states.get(task_id)
-            other_entity = 'other_entity'
-            if cached and cached[1] and cached[1] != self.robot_id:
-                other_entity = cached[1]
-
-            self.get_logger().info(
-                f'[{self.robot_id}] [PICKUP_VAL] Item absent at pickup: marking task '
-                f'{task_id} COMPLETED by entity "{other_entity}".'
-            )
-            self._mark_task_completed_by_other(task_id, other_entity)
-            self._abort_active_task(task_id, release_ownership=False)
+            self._abort_active_task(self.active_task_id, release_ownership=True)
 
     def _confirm_pickup(self):
         """Transitions IN_PROGRESS ──► PICKUP_COMPLETED."""
@@ -990,7 +984,13 @@ class TaskExecutionManager(Node):
         })
 
     def _eval_execution_step(self):
-        """Periodic safety check, proximity arrival watchdog, and dock-return fallback."""
+        """Periodic safety check, proximity arrival watchdog, and dock-return fallback.
+
+        Watchdog fires ONLY when the Nav2 goal handle has already cleared (i.e.
+        Nav2 finished without the result callback firing).  This prevents the
+        watchdog from racing an in-flight Nav2 goal and causing a premature
+        arrival trigger.
+        """
         tol = max(self.arrival_tolerance, 0.8)
 
         # ── IDLE: dock-return fallback (Root Cause 2) ──────────────────────────
@@ -1056,17 +1056,14 @@ class TaskExecutionManager(Node):
                 dx = dropoff.pose.position.x
                 dy = dropoff.pose.position.y
                 dist = math.hypot(self.current_x - dx, self.current_y - dy)
-                if dist <= tol:
+                # Watchdog for DELIVERING: same guard — only fire when goal handle cleared.
+                watchdog_tol = max(self.arrival_tolerance, 0.35)
+                if dist <= watchdog_tol and self.current_goal_handle is None:
                     self.get_logger().info(
                         f'[{self.robot_id}] Proximity arrival watchdog triggered at DROPOFF '
-                        f'(dist: {dist:.2f}m <= {tol:.2f}m) for task {self.active_task_id}'
+                        f'(dist: {dist:.2f}m <= {watchdog_tol:.2f}m, goal_handle cleared) '
+                        f'for task {self.active_task_id}'
                     )
-                    if self.current_goal_handle:
-                        try:
-                            self.current_goal_handle.cancel_goal_async()
-                        except Exception:
-                            pass
-                        self.current_goal_handle = None
                     self._on_delivery_arrival()
 
         elif self.execution_state == TaskExecutionState.IN_PROGRESS:
@@ -1075,17 +1072,17 @@ class TaskExecutionManager(Node):
                 px = pickup.pose.position.x
                 py = pickup.pose.position.y
                 dist = math.hypot(self.current_x - px, self.current_y - py)
-                if dist <= tol:
+                # Watchdog hard-floor: 0.35 m (one robot radius).
+                # Only fire when the Nav2 goal handle has cleared so we do not
+                # race a still-running Nav2 action.  0.8 m was too aggressive
+                # and triggered pickup arrival before Nav2 finished decelerating.
+                watchdog_tol = max(self.arrival_tolerance, 0.35)
+                if dist <= watchdog_tol and self.current_goal_handle is None:
                     self.get_logger().info(
                         f'[{self.robot_id}] Proximity arrival watchdog triggered at PICKUP '
-                        f'(dist: {dist:.2f}m <= {tol:.2f}m) for task {self.active_task_id}'
+                        f'(dist: {dist:.2f}m <= {watchdog_tol:.2f}m, goal_handle cleared) '
+                        f'for task {self.active_task_id}'
                     )
-                    if self.current_goal_handle:
-                        try:
-                            self.current_goal_handle.cancel_goal_async()
-                        except Exception:
-                            pass
-                        self.current_goal_handle = None
                     self._on_pickup_arrival()
 
 

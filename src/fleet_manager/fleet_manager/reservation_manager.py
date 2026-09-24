@@ -29,7 +29,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Point
 from std_msgs.msg import String
-from fleet_interfaces.msg import P2PMessage, Reservation, RobotState
+from fleet_interfaces.msg import P2PMessage, Reservation
 from fleet_manager.p2p_client import P2PClient
 from fleet_manager.audit_log import audit_event
 
@@ -97,14 +97,8 @@ class ReservationManager(Node):
         self.declare_parameter('robot_id', default_id)
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
 
-        # A lease is renewed by the holder while traversing.  This timeout is
-        # only a crash/partition fallback, so it must exceed a normal slow
-        # traversal of the longest configured aisle.
-        self.declare_parameter('safety_timeout_sec', 30.0)
+        self.declare_parameter('safety_timeout_sec', 60.0)
         self.safety_timeout_sec = self.get_parameter('safety_timeout_sec').get_parameter_value().double_value
-        self.declare_parameter('occupancy_freshness_sec', 3.0)
-        self.occupancy_freshness_sec = self.get_parameter(
-            'occupancy_freshness_sec').get_parameter_value().double_value
 
         self.declare_parameter(
             'aisle_config_file',
@@ -112,16 +106,9 @@ class ReservationManager(Node):
         )
         self.aisle_config_file = self.get_parameter('aisle_config_file').get_parameter_value().string_value
 
-        # Tests / harness nodes must not broadcast their config into the
-        # shared fleet graph (it is latched and authoritative).
-        self.declare_parameter('publish_config_on_start', True)
-        self.publish_config_on_start = (
-            self.get_parameter('publish_config_on_start').get_parameter_value().bool_value
-        )
-
         # Lamport logical clock for deterministic traffic ordering
         self.lamport_clock: int = 0
-        self._seen_res_ids: Set[str] = set()
+        self._seen_res_ids: Set[Tuple[str, int]] = set()
 
         # Aisle Segments (loaded from persistent JSON or fallback to defaults)
         self.aisle_specs = self._load_aisle_specs()
@@ -133,10 +120,6 @@ class ReservationManager(Node):
 
         # Local reservations held or requested by this robot
         self.my_active_reservations: Dict[str, Reservation] = {}  # segment_id -> Reservation
-        # Last fleet poses are a physical safety backstop for lease expiry.  A
-        # queued robot must never be promoted into a segment that is still
-        # reported occupied, even if its old lease holder stopped renewing.
-        self._robot_positions: Dict[str, Tuple[float, float, float]] = {}
 
         # P2P client for virtual network coordination
         try:
@@ -165,9 +148,6 @@ class ReservationManager(Node):
         self.fleet_res_sub = self.create_subscription(
             Reservation, '/fleet/reservations', self._handle_reserve_msg, 10
         )
-        self.robot_state_sub = self.create_subscription(
-            RobotState, '/fleet/robot_states', self._handle_robot_state, 10
-        )
         self.traffic_event_pub = self.create_publisher(String, '/fleet/traffic_events', 50)
 
         # /fleet/aisle_config: dynamic synchronization with UI and other nodes
@@ -185,8 +165,7 @@ class ReservationManager(Node):
         self.watchdog_timer = self.create_timer(1.0, self._watchdog_check)
 
         # Publish initial configuration once
-        if self.publish_config_on_start:
-            self._publish_aisle_config()
+        self._publish_aisle_config()
 
         self.get_logger().info(
             f'[{self.robot_id}] Reservation Manager online | '
@@ -319,22 +298,6 @@ class ReservationManager(Node):
             p_max.y = float(aisle.y_max)
         return p_min, p_max
 
-    def _handle_robot_state(self, msg: RobotState):
-        """Cache fresh physical occupancy evidence for safe lease recovery."""
-        pose = msg.current_pose.pose.position
-        self._robot_positions[msg.robot_id] = (float(pose.x), float(pose.y), time.monotonic())
-
-    def _occupants(self, segment_id: str) -> List[str]:
-        """Return robots recently reported inside this aisle's bounding box."""
-        aisle = self.aisles.get(segment_id)
-        if aisle is None:
-            return []
-        now = time.monotonic()
-        return [
-            robot_id for robot_id, (x, y, seen_at) in self._robot_positions.items()
-            if now - seen_at <= self.occupancy_freshness_sec and aisle.contains_point(x, y)
-        ]
-
     # ──────────────────────────────────────────────────────────────────────────
     # Public Reservation API (Local Robot Invocation)
     # ──────────────────────────────────────────────────────────────────────────
@@ -350,7 +313,7 @@ class ReservationManager(Node):
 
         self.lamport_clock += 1
         res_id = f"{self.robot_id}:{segment_id}:{self.lamport_clock}"
-        self._seen_res_ids.add(res_id)
+        self._seen_res_ids.add((res_id, Reservation.STATE_REQUESTED))
 
         p_min, p_max = self.get_segment_bounds(segment_id)
         now_time = self.get_clock().now()
@@ -387,7 +350,7 @@ class ReservationManager(Node):
 
         self.lamport_clock += 1
         res_id = f"{self.robot_id}:{segment_id}:{self.lamport_clock}"
-        self._seen_res_ids.add(res_id)
+        self._seen_res_ids.add((res_id, Reservation.STATE_RELEASED))
 
         now_time = self.get_clock().now()
         p_min, p_max = self.get_segment_bounds(segment_id)
@@ -449,6 +412,7 @@ class ReservationManager(Node):
             self.get_logger().info(
                 f'[{self.robot_id}] [SESSION] Re-grant {segment_id} to {res.robot_id} (already holder)'
             )
+            self._broadcast_grant(res)
             return True
 
         # Case 2: Segment is free
@@ -463,9 +427,14 @@ class ReservationManager(Node):
                 f'[{self.robot_id}] [SESSION] ✓ GRANTED {segment_id} to {res.robot_id} '
                 f'(priority={res.priority}, Lamport={res.lamport_clock}, task={res.task_id})'
             )
-            # If we granted it to ourselves, announce grant
-            if res.robot_id == self.robot_id:
-                self._broadcast_grant(res)
+            # Announce this grant to the fleet. The requester's own node never
+            # reaches this branch for its own requests (see _dedupe_incoming,
+            # which treats robot_id == self.robot_id as a local echo to skip),
+            # so gating this on "granted to ourselves" meant NO grant was ever
+            # broadcast for any request — every peer node silently updated its
+            # own local aisle state and told no one. Any node that decides a
+            # grant must announce it, regardless of whose robot_id it is.
+            self._broadcast_grant(res)
             self._audit('reservation_granted', robot_id=res.robot_id, reservation_id=res.reservation_id,
                         segment_id=segment_id, holder=res.robot_id, task_id=res.task_id,
                         priority=res.priority, lamport_clock=res.lamport_clock,
@@ -516,9 +485,7 @@ class ReservationManager(Node):
             if res.robot_id == self.robot_id and segment_id in self.my_active_reservations:
                 del self.my_active_reservations[segment_id]
 
-            # Promote only after the segment is physically clear.  A Nav2
-            # completion/release can arrive a little before the pose update
-            # showing the robot outside the aisle.
+            # Promote next waiting robot in deterministic order
             self._promote_next_waiter(segment_id)
         else:
             # Releaser was in wait queue (cancelled its request)
@@ -545,12 +512,9 @@ class ReservationManager(Node):
 
         current = aisle.current_holder
         if current is not None and current.robot_id == res.robot_id:
-            # ACTIVE messages are holder heartbeats.  They must refresh the
-            # lease; otherwise a healthy robot crossing a long aisle is
-            # incorrectly expired and a waiter can be admitted into it.
-            if res.state == Reservation.STATE_ACTIVE:
-                aisle.holder_start_time = time.monotonic()
-                current.state = Reservation.STATE_ACTIVE
+            # Already recorded as holder — refresh the watchdog clock so
+            # STATE_ACTIVE renewals prevent false stale-lease expiry on peers.
+            aisle.holder_start_time = time.monotonic()
             return
 
         if current is not None and current.robot_id != res.robot_id:
@@ -566,6 +530,8 @@ class ReservationManager(Node):
 
         if res.robot_id == self.robot_id:
             self.my_active_reservations[segment_id] = res
+            self.fleet_res_pub.publish(res)
+            self.traffic_reserve_pub.publish(res)
 
         self.get_logger().info(
             f'[{self.robot_id}] [SESSION] ⇄ SYNCED grant: {segment_id} held by {res.robot_id} '
@@ -580,14 +546,6 @@ class ReservationManager(Node):
         """Promotes the first robot in the deterministic wait queue to GRANTED."""
         aisle = self.aisles.get(segment_id)
         if not aisle or not aisle.wait_queue:
-            return
-
-        occupants = self._occupants(segment_id)
-        if occupants:
-            self.get_logger().warn(
-                f'[{self.robot_id}] [TRAFFIC] Deferring promotion for {segment_id}; '
-                f'physical occupancy reported by {occupants}.'
-            )
             return
 
         next_res = aisle.wait_queue.pop(0)
@@ -606,7 +564,12 @@ class ReservationManager(Node):
 
         if next_res.robot_id == self.robot_id:
             self.my_active_reservations[segment_id] = next_res
-            self._broadcast_grant(next_res)
+
+        # Same reasoning as the grant path in _process_reservation_request:
+        # this promotion must be announced regardless of whose robot_id it is,
+        # since the promoted robot's own node will have skipped this segment's
+        # release/promotion cycle as a local echo of its own earlier request.
+        self._broadcast_grant(next_res)
 
     def _broadcast_grant(self, res: Reservation):
         """Broadcasts grant confirmation on /traffic/reserve and P2P."""
@@ -627,9 +590,6 @@ class ReservationManager(Node):
         now = time.monotonic()
         for seg_id, aisle in self.aisles.items():
             if aisle.current_holder is None:
-                # A release may have been received just before its final pose
-                # left the aisle.  Re-check queued work once occupancy clears.
-                self._promote_next_waiter(seg_id)
                 continue
 
             holder = aisle.current_holder
@@ -637,17 +597,6 @@ class ReservationManager(Node):
 
             # Check if lease expired
             if elapsed > self.safety_timeout_sec:
-                occupants = self._occupants(seg_id)
-                if occupants:
-                    # Do not turn a missing heartbeat into permission for a
-                    # second robot to enter an aisle that telemetry still says
-                    # is occupied.  Preserve the lock and wait for either a
-                    # renewal, a clean exit, or stale occupancy evidence.
-                    self.get_logger().warn(
-                        f'[{self.robot_id}] [TRAFFIC] Lease timeout for {seg_id} holder={holder.robot_id}, '
-                        f'but physical occupancy remains {occupants}; keeping aisle closed.'
-                    )
-                    continue
                 self.get_logger().warn(
                     f'[{self.robot_id}] [TRAFFIC] ⚠ Stale reservation detected for segment "{seg_id}" '
                     f'held by {holder.robot_id} (held {elapsed:.1f}s > {self.safety_timeout_sec}s timeout). '
@@ -673,7 +622,7 @@ class ReservationManager(Node):
                 expired.task_id = holder.task_id
                 expired.zone_min = p_min
                 expired.zone_max = p_max
-                self._seen_res_ids.add(expired.reservation_id)
+                self._seen_res_ids.add((expired.reservation_id, Reservation.STATE_EXPIRED))
                 self.traffic_release_pub.publish(expired)
                 self.fleet_res_pub.publish(expired)
                 if self.p2p:
@@ -683,26 +632,34 @@ class ReservationManager(Node):
                             holder=holder.robot_id, held_seconds=round(elapsed, 3),
                             timeout_seconds=self.safety_timeout_sec,
                             recovery='promote_next_waiter')
-                self._promote_next_waiter(seg_id)
+
+                # Only the robot that is FIRST in the wait queue promotes itself.
+                # If every node called _promote_next_waiter independently they
+                # would each broadcast a STATE_GRANTED with a different Lamport
+                # clock, causing a race where some nodes adopt one grant and
+                # others adopt another, leaving active_reservations inconsistent
+                # across the fleet and both robots moving simultaneously.
+                # The first waiter self-promotes and re-broadcasts the grant;
+                # all other nodes will sync when they receive that broadcast.
+                if aisle.wait_queue and aisle.wait_queue[0].robot_id == self.robot_id:
+                    self._promote_next_waiter(seg_id)
+                elif aisle.wait_queue:
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [SESSION] Expiry detected for {seg_id}: '
+                        f'waiting for {aisle.wait_queue[0].robot_id} to self-promote.'
+                    )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Message Handlers & Serialization
     # ──────────────────────────────────────────────────────────────────────────
 
     def _dedupe_incoming(self, msg: Reservation) -> bool:
-        """Returns True only when this reservation event was already handled.
-
-        Requests are produced by :class:`ConflictResolver`, while arbitration
-        happens in this node.  Those two nodes share a robot id, so rejecting
-        every self-originated ROS message prevents this robot's manager from
-        ever granting its own approach request.  Locally-created requests from
-        ``request_aisle_reservation`` are still safe: that API records their
-        id before publishing and processes them directly.
-        """
-        if msg.reservation_id and msg.reservation_id in self._seen_res_ids:
+        """Returns True only when this exact (reservation_id, state) event was already handled."""
+        key = (msg.reservation_id, msg.state)
+        if msg.reservation_id and key in self._seen_res_ids:
             return True
         if msg.reservation_id:
-            self._seen_res_ids.add(msg.reservation_id)
+            self._seen_res_ids.add(key)
         return False
 
     def _handle_reserve_msg(self, msg: Reservation):

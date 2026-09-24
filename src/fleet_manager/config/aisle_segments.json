@@ -1,14 +1,4 @@
 {
-  "aisle_1": {
-    "id": "aisle_1",
-    "segment_id": "aisle_1",
-    "name": "Aisle 1",
-    "x_min": 4.493,
-    "x_max": 5.743,
-    "y_min": 7.521,
-    "y_max": 12.271,
-    "is_single_lane": true
-  },
   "aisle_2": {
     "id": "aisle_2",
     "segment_id": "aisle_2",
@@ -33,10 +23,10 @@
     "id": "aisle_4",
     "segment_id": "aisle_4",
     "name": "Aisle 4",
-    "x_min": 15.493,
-    "x_max": 16.643,
-    "y_min": -3.129,
-    "y_max": 1.521,
+    "x_min": 4.393,
+    "x_max": 5.643,
+    "y_min": 7.621,
+    "y_max": 13.271,
     "is_single_lane": true
   }
 }

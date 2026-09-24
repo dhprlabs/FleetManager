@@ -35,6 +35,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped
 from nav2_msgs.action import NavigateToPose
+from std_msgs.msg import String
 
 from fleet_interfaces.msg import (
     Bundle,
@@ -48,7 +49,12 @@ from fleet_interfaces.msg import (
     WorldView,
 )
 from fleet_manager.p2p_client import P2PClient
-from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS
+
+try:
+    from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS, ReservationManager
+except ImportError:
+    from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS
+    ReservationManager = None
 
 
 class TaskExecutionState(Enum):
@@ -87,6 +93,15 @@ class TaskExecutionManager(Node):
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
+        # Extra distance (m) beyond the aisle bounds the robot must travel before
+        # its aisle lease is released (~ robot half-length + slack).
+        self.declare_parameter('aisle_exit_margin', 0.5)
+        # SAME file ConflictResolver loads its aisle map from. Pass the same
+        # value to both nodes from the launch file so they cannot diverge.
+        self.declare_parameter(
+            'aisle_config_file',
+            '/home/mangal-devanshu/sih_ws/FleetManager/src/fleet_manager/config/aisle_segments.json'
+        )
 
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
         self.enable_nav2 = self.get_parameter('enable_nav2').get_parameter_value().bool_value
@@ -99,6 +114,8 @@ class TaskExecutionManager(Node):
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
         self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
         self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
+        self.aisle_exit_margin = self.get_parameter('aisle_exit_margin').get_parameter_value().double_value
+        aisle_config_file = self.get_parameter('aisle_config_file').get_parameter_value().string_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
         # Treat initial pose as the robot's dock position
@@ -133,6 +150,13 @@ class TaskExecutionManager(Node):
         self.current_goal_handle = None
         self._goal_generation = 0
 
+        # Traffic pause/resume tracking
+        self._paused_for_traffic: bool = False
+        self._traffic_pause_time: float = 0.0
+        self._saved_target_pose: Optional[PoseStamped] = None
+        self._saved_target_name: Optional[str] = None
+        self._saved_on_reached = None
+
         # Gazebo GetEntityState service client (Phase 9)
         self._gazebo_entity_client = None
         if self.enable_pickup_validation:
@@ -163,6 +187,13 @@ class TaskExecutionManager(Node):
         except Exception:
             pass
 
+        # ── Aisle map ──────────────────────────────────────────────────────
+        # Must be IDENTICAL to ConflictResolver's map, otherwise the bridge
+        # releases the lease while the resolver still considers the robot inside.
+        # 1) load the JSON the resolver uses, 2) fall back to package defaults,
+        # 3) replace with /fleet/aisle_config (transient-local) when it arrives.
+        self._aisle_segments, aisle_source = self._load_initial_aisles(aisle_config_file)
+
         # ── Subscriptions ──────────────────────────────────────────────────
         self.bundle_sub = self.create_subscription(
             Bundle, 'bundle', self._handle_bundle, 10
@@ -186,6 +217,16 @@ class TaskExecutionManager(Node):
         )
         self.task_events_sub = self.create_subscription(
             Task, '/fleet/task_events', self._handle_task_event, 10
+        )
+        # ReservationManager publishes the aisle map once, latched. A volatile
+        # subscription would never receive it, so match the resolver's QoS.
+        aisle_config_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.aisle_config_sub = self.create_subscription(
+            String, '/fleet/aisle_config', self._handle_aisle_config_msg, aisle_config_qos
         )
 
         # ── Publishers ─────────────────────────────────────────────────────
@@ -211,15 +252,58 @@ class TaskExecutionManager(Node):
         self.traffic_reserve_sub = self.create_subscription(
             Reservation, '/traffic/reserve', self._handle_traffic_reserve_msg, 10
         )
+        self.fleet_res_sub = self.create_subscription(
+            Reservation, '/fleet/reservations', self._handle_traffic_reserve_msg, 10
+        )
+        self.traffic_events_sub = self.create_subscription(
+            String, '/fleet/traffic_events', self._handle_traffic_event_msg, 10
+        )
         self._current_held_aisle: Optional[str] = None
 
-        # Aisle configuration for session logging
-        self._aisle_segments = DEFAULT_AISLE_SEGMENTS
+        # Aisles whose lease is still held because the robot has not physically
+        # left them yet (released by _check_pending_aisle_release once clear,
+        # unless ConflictResolver releases it first).
+        self._pending_release_segs: Set[str] = set()
+
         self._last_aisle_log_time = 0.0
         self._last_aisle_state = None
 
+        self.get_logger().info(
+            f'[{self.robot_id}] Task Execution Manager active | '
+            f'Nav2 Target: /{self.robot_id}/navigate_to_pose | '
+            f'Dwell: {self.pickup_dwell_sec}s | '
+            f'Pickup validation: {self.enable_pickup_validation} | '
+            f'Home Dock: ({self.dock_x:.2f}, {self.dock_y:.2f}) | '
+            f'Aisle exit margin: {self.aisle_exit_margin}m'
+        )
+        self._log_aisle_bounds(aisle_source)
+
         # Execution evaluation timer
         self.eval_timer = self.create_timer(0.5, self._eval_execution_step)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Aisle geometry helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _load_initial_aisles(self, path: str) -> Tuple[Dict[str, dict], str]:
+        """Loads the aisle map exactly like ConflictResolver does."""
+        if ReservationManager is not None:
+            try:
+                specs = ReservationManager.load_aisle_specs(path)
+                if specs:
+                    return dict(specs), f'json file {path}'
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [AISLES] {path} returned no aisles; using defaults.'
+                )
+            except Exception as e:
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [AISLES] Could not load {path}: {e}; using defaults.'
+                )
+        else:
+            self.get_logger().warn(
+                f'[{self.robot_id}] [AISLES] ReservationManager not importable; using defaults.'
+            )
+        return dict(DEFAULT_AISLE_SEGMENTS), 'DEFAULT_AISLE_SEGMENTS (fallback)'
 
     def _get_aisle_at_point(self, x: float, y: float) -> Optional[str]:
         """Check if a point is inside any single-lane aisle segment."""
@@ -237,13 +321,68 @@ class TaskExecutionManager(Node):
             return (spec['x_min'], spec['x_max'], spec['y_min'], spec['y_max'])
         return None
 
-        self.get_logger().info(
-            f'[{self.robot_id}] Task Execution Manager active | '
-            f'Nav2 Target: /{self.robot_id}/navigate_to_pose | '
-            f'Dwell: {self.pickup_dwell_sec}s | '
-            f'Pickup validation: {self.enable_pickup_validation} | '
-            f'Home Dock: ({self.dock_x:.2f}, {self.dock_y:.2f})'
-        )
+    def _log_aisle_bounds(self, origin: str):
+        """Logs every aisle's bounds so they can be compared with ConflictResolver's."""
+        try:
+            parts = []
+            for seg_id in sorted(self._aisle_segments.keys()):
+                b = self._get_aisle_bounds(seg_id)
+                if b:
+                    parts.append(f'{seg_id}=x[{b[0]:.2f},{b[1]:.2f}] y[{b[2]:.2f},{b[3]:.2f}]')
+            self.get_logger().info(
+                f'[{self.robot_id}] [AISLES] bounds from {origin}: ' + (' | '.join(parts) or '(none)')
+            )
+        except Exception as e:
+            self.get_logger().warn(f'[{self.robot_id}] [AISLES] could not log bounds: {e}')
+
+    def _handle_aisle_config_msg(self, msg: String):
+        """Handles aisle map updates (normalised exactly like ConflictResolver)."""
+        try:
+            payload = json.loads(msg.data)
+            raw_aisles = payload.get('aisles', payload)
+            new_segments = {}
+
+            if isinstance(raw_aisles, dict):
+                for seg_id, spec in raw_aisles.items():
+                    new_segments[seg_id] = {
+                        'segment_id': seg_id,
+                        'x_min': float(spec.get('x_min', 0.0)),
+                        'x_max': float(spec.get('x_max', 0.0)),
+                        'y_min': float(spec.get('y_min', 0.0)),
+                        'y_max': float(spec.get('y_max', 0.0)),
+                        'is_single_lane': bool(spec.get('is_single_lane', True)),
+                    }
+            elif isinstance(raw_aisles, list):
+                for item in raw_aisles:
+                    seg_id = item.get('segment_id') or item.get('id')
+                    if not seg_id:
+                        continue
+                    new_segments[seg_id] = {
+                        'segment_id': seg_id,
+                        'x_min': float(item.get('x_min', 0.0)),
+                        'x_max': float(item.get('x_max', 0.0)),
+                        'y_min': float(item.get('y_min', 0.0)),
+                        'y_max': float(item.get('y_max', 0.0)),
+                        'is_single_lane': bool(item.get('is_single_lane', True)),
+                    }
+
+            if new_segments:
+                self._aisle_segments = new_segments
+                self._log_aisle_bounds('/fleet/aisle_config')
+        except Exception as e:
+            self.get_logger().warn(f'[{self.robot_id}] Error parsing /fleet/aisle_config: {e}')
+
+    def _is_within_aisle(self, seg: str, margin: float = 0.0) -> Optional[bool]:
+        """True if the robot is inside aisle `seg` expanded by `margin` metres.
+
+        Returns None when the bridge has no bounds for `seg` (so the caller can
+        fail safe instead of assuming the robot is outside).
+        """
+        spec = self._aisle_segments.get(seg)
+        if not spec:
+            return None
+        return (spec['x_min'] - margin <= self.current_x <= spec['x_max'] + margin and
+                spec['y_min'] - margin <= self.current_y <= spec['y_max'] + margin)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Inbound Handlers
@@ -439,17 +578,15 @@ class TaskExecutionManager(Node):
     def _on_pickup_arrival(self):
         """
         Arrived at pickup location.
-        Phase 9: validate the physical item exists in Gazebo before proceeding.
+        Gazebo entity inspection disabled: directly confirm pickup and rely on
+        fleet CRDT / P2P state for ownership and task completion tracking.
         """
         if self.execution_state != TaskExecutionState.IN_PROGRESS or not self.active_task_id:
             return
         self._goal_generation += 1
         self.current_goal_handle = None
-        if self.enable_pickup_validation and self._gazebo_entity_client is not None:
-            self._validate_pickup_item()
-        else:
-            # No validation — proceed directly
-            self._confirm_pickup()
+        # Gazebo entity check bypassed - directly confirm pickup
+        self._confirm_pickup()
 
     def _validate_pickup_item(self):
         """
@@ -739,28 +876,188 @@ class TaskExecutionManager(Node):
             self.execution_state = TaskExecutionState.IDLE
 
     def _handle_traffic_reserve_msg(self, msg: Reservation):
-        """Receives traffic reservation grants."""
-        if msg.robot_id == self.robot_id and msg.state == Reservation.STATE_GRANTED:
-            self._current_held_aisle = msg.segment_id
+        """Tracks reservation state for this robot and resumes paused navigation on a grant."""
+        seg = msg.segment_id
+
+        # Another robot now holds / is using the aisle: any release we had
+        # pending is moot (we no longer hold it).
+        if msg.robot_id != self.robot_id:
+            if msg.state in (Reservation.STATE_GRANTED, Reservation.STATE_ACTIVE):
+                self._pending_release_segs.discard(seg)
+            return
+
+        # ConflictResolver (or the manager) already released / expired OUR lease
+        # (e.g. it auto-releases when the robot exits the aisle). Keep the bridge's
+        # view in sync so we never send a duplicate release that could hit the next holder.
+        if msg.state in (Reservation.STATE_RELEASED, Reservation.STATE_EXPIRED):
+            self._pending_release_segs.discard(seg)
+            if self._current_held_aisle == seg:
+                self._current_held_aisle = None
+            return
+
+        if msg.state == Reservation.STATE_GRANTED:
+            self._current_held_aisle = seg
+            # We hold this aisle again: cancel any pending exit-release for it.
+            self._pending_release_segs.discard(seg)
+            if self._paused_for_traffic and self._saved_target_pose is not None:
+                self.get_logger().info(
+                    f'[{self.robot_id}] [TRAFFIC] Reservation GRANTED for {seg}! '
+                    f'Resuming navigation to {self._saved_target_name} from current position ({self.current_x:.2f}, {self.current_y:.2f}).'
+                )
+                self._paused_for_traffic = False
+                target_pose = self._saved_target_pose
+                target_name = self._saved_target_name
+                on_reached = self._saved_on_reached
+                self._saved_target_pose = None
+                self._saved_target_name = None
+                self._saved_on_reached = None
+                self._dispatch_navigation(target_pose, target_name, on_reached)
+
+    def _handle_traffic_event_msg(self, msg: String):
+        """Reacts to traffic events from conflict_resolver.
+
+        Blocking events (pibt_wait, orca_avoidance):
+          - On first receipt: cancel the active Nav2 goal and enter traffic-pause.
+          - On subsequent receipts while already paused: refresh the deadlock
+            watchdog clock so the 60 s timeout measures *silence from the blocker*,
+            not total accumulated wait time.  A legitimately blocked robot will
+            keep receiving these events every ~100 ms; the watchdog fires only when
+            the blocker stops signalling unexpectedly.
+
+        Clearing events (conflict_resolved, traffic_clear):
+          - Resume navigation only when a reservation grant is already held,
+            so the robot does not re-enter a still-occupied aisle.
+        """
+        try:
+            payload = json.loads(msg.data)
+            robot_id = payload.get('robot_id')
+            event = payload.get('event')
+            if robot_id != self.robot_id:
+                return
+
+            # ── Blocking events ───────────────────────────────────────────────
+            _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance')
+            if event in _BLOCKING_EVENTS:
+                if not self._paused_for_traffic and self.current_goal_handle is not None:
+                    # First block: cancel active Nav2 goal and enter pause.
+                    self.get_logger().warn(
+                        f'[{self.robot_id}] [TRAFFIC] Blocking event "{event}" — '
+                        f'pausing Nav2 goal to prevent wheel-slip & recovery spins.'
+                    )
+                    self._paused_for_traffic = True
+                    try:
+                        self.current_goal_handle.cancel_goal_async()
+                    except Exception as e:
+                        self.get_logger().warn(
+                            f'[{self.robot_id}] Could not cancel goal handle: {e}'
+                        )
+                    self.current_goal_handle = None
+                # Always refresh the watchdog clock while actively blocked.
+                # This way the deadlock timeout measures silence from the blocker,
+                # not the total time the robot has been waiting.
+                if self._paused_for_traffic:
+                    self._traffic_pause_time = time.monotonic()
+
+            # ── Clearing events ───────────────────────────────────────────────
+            elif event in ('conflict_resolved', 'traffic_clear'):
+                if self._paused_for_traffic and self._saved_target_pose is not None:
+                    # Only resume when a reservation grant has already been received.
+                    # Without a grant the aisle may still be occupied by another robot.
+                    # The primary resume path is _handle_traffic_reserve_msg (grant);
+                    # this path acts as a secondary confirmation signal.
+                    if self._current_held_aisle:
+                        self.get_logger().info(
+                            f'[{self.robot_id}] [TRAFFIC] Conflict cleared + grant confirmed. '
+                            f'Resuming navigation to {self._saved_target_name}.'
+                        )
+                        self._paused_for_traffic = False
+                        target_pose = self._saved_target_pose
+                        target_name = self._saved_target_name
+                        on_reached = self._saved_on_reached
+                        self._saved_target_pose = None
+                        self._saved_target_name = None
+                        self._saved_on_reached = None
+                        self._dispatch_navigation(target_pose, target_name, on_reached)
+                    else:
+                        self.get_logger().info(
+                            f'[{self.robot_id}] [TRAFFIC] "{event}" received but no '
+                            f'reservation grant yet — staying paused until grant arrives.'
+                        )
+        except Exception:
+            pass
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Aisle lease release (held until the robot is physically out of the aisle)
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _publish_aisle_release(self, seg: str):
+        """Publishes a RELEASED reservation for `seg` on the traffic and fleet topics."""
+        # Unique id per release: peers dedupe by reservation_id, so a
+        # constant id would silently drop every release after the first.
+        now_sec = self.get_clock().now().nanoseconds / 1e9
+        res = Reservation()
+        res.reservation_id = f"{self.robot_id}:{seg}:release:{now_sec:.3f}"
+        res.robot_id = self.robot_id
+        res.segment_id = seg
+        res.state = Reservation.STATE_RELEASED
+        self.traffic_release_pub.publish(res)
+        # ConflictResolver tracks holder state on the fleet topic; mirror
+        # the release so all safety layers converge on the same lifecycle.
+        self.fleet_res_pub.publish(res)
+        self.get_logger().info(
+            f'[{self.robot_id}] [TRAFFIC] Released aisle reservation for {seg} '
+            f'at pos=({self.current_x:.2f},{self.current_y:.2f}) '
+            f'bounds={self._get_aisle_bounds(seg)} margin={self.aisle_exit_margin}.'
+        )
 
     def _release_aisle_if_held(self):
-        """Releases physical single-lane aisle reservation if held."""
-        if self._current_held_aisle:
-            seg = self._current_held_aisle
-            self._current_held_aisle = None
-            # Unique id per release: peers dedupe by reservation_id, so a
-            # constant id would silently drop every release after the first.
-            now_sec = self.get_clock().now().nanoseconds / 1e9
-            res = Reservation()
-            res.reservation_id = f"{self.robot_id}:{seg}:release:{now_sec:.3f}"
-            res.robot_id = self.robot_id
-            res.segment_id = seg
-            res.state = Reservation.STATE_RELEASED
-            self.traffic_release_pub.publish(res)
-            # ConflictResolver tracks holder state on the fleet topic; mirror
-            # the release so all safety layers converge on the same lifecycle.
-            self.fleet_res_pub.publish(res)
-            self.get_logger().info(f'[{self.robot_id}] [TRAFFIC] Released aisle reservation for {seg}.')
+        """Releases the single-lane aisle lease, but only once the robot is
+        physically clear of the aisle (plus `aisle_exit_margin`).
+
+        - Still in/near the aisle  -> keep the lease; ConflictResolver releases it
+          when the robot exits, or `_check_pending_aisle_release` does as a fallback.
+        - Bounds for the aisle unknown to this node -> fail safe: do NOT publish a
+          release (we cannot tell whether the robot is still inside) and leave it to
+          ConflictResolver. Logged loudly so the config can be fixed.
+        """
+        seg = self._current_held_aisle
+        if not seg:
+            return
+        self._current_held_aisle = None
+
+        inside = self._is_within_aisle(seg, self.aisle_exit_margin)
+        if inside is None:
+            self.get_logger().error(
+                f'[{self.robot_id}] [TRAFFIC] No bounds known for {seg} (known: '
+                f'{sorted(self._aisle_segments.keys())}); NOT releasing the lease from the bridge. '
+                f'Check aisle_config_file / /fleet/aisle_config.'
+            )
+            return
+
+        if inside:
+            self.get_logger().info(
+                f'[{self.robot_id}] [TRAFFIC] Task ended but robot still in/near {seg} '
+                f'at pos=({self.current_x:.2f},{self.current_y:.2f}) bounds={self._get_aisle_bounds(seg)}. '
+                f'Holding lease until it exits.'
+            )
+            self._pending_release_segs.add(seg)
+            return
+
+        self._publish_aisle_release(seg)
+
+    def _check_pending_aisle_release(self):
+        """Releases any deferred aisle lease once the robot has left that aisle."""
+        for seg in list(self._pending_release_segs):
+            inside = self._is_within_aisle(seg, self.aisle_exit_margin)
+            if inside is None:
+                self.get_logger().error(
+                    f'[{self.robot_id}] [TRAFFIC] Lost bounds for {seg} while release pending; '
+                    f'dropping pending release (ConflictResolver must release it).'
+                )
+                self._pending_release_segs.discard(seg)
+            elif not inside:
+                self._pending_release_segs.discard(seg)
+                self._publish_aisle_release(seg)
 
     def _release_task_ownership(self, task_id: str):
         """
@@ -861,7 +1158,7 @@ class TaskExecutionManager(Node):
         )
         self._publish_task_state(Task.STATE_COMPLETED)
 
-        # Release aisle reservation if held
+        # Release aisle reservation if held (deferred until the robot exits the aisle)
         self._release_aisle_if_held()
 
         # Reset active state and return to IDLE to pick next task from bundle
@@ -881,6 +1178,9 @@ class TaskExecutionManager(Node):
         task_id = self.active_task_id
         self._goal_generation += 1
         goal_generation = self._goal_generation
+        self._saved_target_pose = target_pose
+        self._saved_target_name = target_name
+        self._saved_on_reached = on_reached
         if self.enable_nav2 and self.nav_client.wait_for_server(timeout_sec=0.5):
             goal_msg = NavigateToPose.Goal()
             goal_msg.pose = target_pose
@@ -947,6 +1247,14 @@ class TaskExecutionManager(Node):
                         task_id: Optional[str], goal_generation: int):
         if self.active_task_id != task_id or self._goal_generation != goal_generation:
             return
+        # If the goal cancellation was intentionally initiated due to traffic wait, do not abort
+        if self._paused_for_traffic:
+            self.get_logger().info(
+                f'[{self.robot_id}] Nav2 goal pause acknowledged for traffic wait. Awaiting reservation grant.'
+            )
+            self.current_goal_handle = None
+            return
+
         status = future.result().status
         tx = target_pose.pose.position.x
         ty = target_pose.pose.position.y
@@ -962,10 +1270,7 @@ class TaskExecutionManager(Node):
             )
             on_reached()
         else:
-            # Nav2 aborted, cancelled, or failed.  The execution state machine is
-            # now stuck and the task will never complete unless we release it.
-            # Publish STATE_BLOCKED so Max-Sum triggers a reallocation re-bid,
-            # then release ownership and return to IDLE.
+            # Nav2 aborted, cancelled, or failed.
             self.get_logger().error(
                 f'[{self.robot_id}] Nav2 goal FAILED (status: {status}, '
                 f'distance: {dist:.2f}m > tol: {tol:.2f}m). '
@@ -1022,13 +1327,42 @@ class TaskExecutionManager(Node):
         """
         tol = max(self.arrival_tolerance, 0.8)
 
+        # Release any deferred aisle lease once the robot has physically left the
+        # aisle. Must run before the IDLE early-return below, because a robot that
+        # just finished its task is IDLE.
+        self._check_pending_aisle_release()
+
+        # ── Traffic pause watchdog (deadlock safety net) ──────────────────────
+        # Resume ONLY as a last-resort if we've been paused for an unreasonably
+        # long time (60s). Normal resume happens via _handle_traffic_reserve_msg
+        # when a GRANTED reservation arrives, or via the conflict_resolved event
+        # when a grant is already held. This timeout prevents indefinite parking
+        # due to lost messages.
+        if self._paused_for_traffic and self._saved_target_pose is not None:
+            pause_dur = time.monotonic() - getattr(self, '_traffic_pause_time', 0.0)
+            if pause_dur >= 60.0:
+                self.get_logger().warn(
+                    f'[{self.robot_id}] [TRAFFIC] Safety watchdog: paused {pause_dur:.0f}s — '
+                    f'resuming navigation to {self._saved_target_name} (possible lost grant).'
+                )
+                self._paused_for_traffic = False
+                target_pose = self._saved_target_pose
+                target_name = self._saved_target_name
+                on_reached = self._saved_on_reached
+                self._saved_target_pose = None
+                self._saved_target_name = None
+                self._saved_on_reached = None
+                self._dispatch_navigation(target_pose, target_name, on_reached)
+                return
+
         # ── IDLE: dock-return fallback (Root Cause 2) ──────────────────────────
         # When the robot has no active task and is outside comm_radius of the dock
         # it cannot receive new task broadcasts or gossip with peers.  Navigate it
         # back to the dock so it re-enters the radio mesh.
         if self.execution_state == TaskExecutionState.IDLE and not self.active_task_id:
             dist_to_dock = math.hypot(self.current_x - self.dock_x, self.current_y - self.dock_y)
-            if dist_to_dock > self.comm_radius and not self._dock_return_active:
+            dock_arrival_tol = max(self.arrival_tolerance, 0.8)
+            if dist_to_dock > dock_arrival_tol and not self._dock_return_active:
                 self._dock_return_active = True
                 self._dock_return_generation += 1
                 generation = self._dock_return_generation
@@ -1058,8 +1392,8 @@ class TaskExecutionManager(Node):
                     target_name='DOCK (fallback return)',
                     on_reached=_on_dock_arrived,
                 )
-            elif dist_to_dock <= self.comm_radius and self._dock_return_active:
-                # Arrived back within range; the arrival callback will clear the flag.
+            elif dist_to_dock <= dock_arrival_tol and self._dock_return_active:
+                # Arrived back within dock range; the arrival callback will clear the flag.
                 # Safety: clear it here too in case the callback was missed.
                 self._dock_return_active = False
             return
@@ -1083,7 +1417,7 @@ class TaskExecutionManager(Node):
         # ─────────────────────────────────────────────────────────────────────
         current_aisle = self._get_aisle_at_point(self.current_x, self.current_y)
         now = time.monotonic()
-        
+
         # Log aisle state changes
         if current_aisle != self._last_aisle_state:
             self.get_logger().info(

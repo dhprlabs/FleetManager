@@ -595,20 +595,19 @@ class ConflictCoordinator:
                 return None, False, f"[{self.robot_id}] Aisle '{approaching_aisle}' reserved by self. ORCA disabled. Nav2 executes uninterrupted."
 
             elif inside_aisle:
-                # Already inside a single-lane aisle but we no longer hold the
-                # grant (lease expired mid-traversal, or another robot was
-                # promoted).  We MUST stop and wait for the aisle to clear;
-                # proceeding would cause a head-on collision with the newly
-                # admitted robot.  The watchdog/renewal should have kept our
-                # lease alive, but if it failed we fall back to a safe stop.
-                self.is_waiting_at_choke = True
-                self.current_choke_segment = aisle_id
-                my_agent.record_waiting(dt)
-                override_vel = Vector2(0.0, 0.0)
-                who = holder if holder else 'untracked'
-                return override_vel, True, (f"[{self.robot_id}] Inside aisle '{aisle_id}' without held reservation "
-                                            f"(holder={who}). Lease lost mid-traversal — STOP to avoid collision. "
-                                            f"PIBT wait active.")
+                if holder is not None and holder != self.robot_id:
+                    # An actual other robot holds this aisle — stop to avoid collision
+                    self.is_waiting_at_choke = True
+                    self.current_choke_segment = aisle_id
+                    my_agent.record_waiting(dt)
+                    override_vel = Vector2(0.0, 0.0)
+                    return override_vel, True, (f"[{self.robot_id}] Inside aisle '{aisle_id}' held by {holder} — "
+                                                f"STOP to avoid collision. PIBT wait active.")
+                else:
+                    # Inside aisle with no recorded holder: allow robot to proceed to exit the aisle cleanly
+                    self.is_waiting_at_choke = False
+                    my_agent.reset_waiting()
+                    return None, False, f"[{self.robot_id}] Inside aisle '{aisle_id}' (no conflicting holder). Proceeding to exit."
 
             elif holder is not None and holder != self.robot_id:
                 self.is_waiting_at_choke = True
@@ -636,34 +635,13 @@ class ConflictCoordinator:
                                             f"ORCA disabled. Velocity override: STOP.")
 
         # ─────────────────────────────────────────────────────────────────────
-        # Step 2: Open Space — Continuous ORCA Local Collision Avoidance
+        # Step 2: Open Space — Nav2 Local Planner (DWB + Costmap) handles dynamic avoidance
         # ─────────────────────────────────────────────────────────────────────
-        # Nav2 has no active translational command.  A stationary robot must not
-        # create an ORCA avoidance activation merely because another robot is
-        # nearby; the command mux will continue forwarding the zero command.
-        if nav2_pref_vel.length() <= 0.01:
-            my_agent.reset_waiting()
-            return None, False, f"[{self.robot_id}] Nav2 stationary. ORCA inactive."
-
-        open_space_neighbors: List[Tuple[Vector2, Vector2]] = []
-        for p_id, (p_pos, p_vel) in peer_states.items():
-            if not self.is_in_single_lane_aisle(p_pos, margin=0.0):
-                open_space_neighbors.append((p_pos, p_vel))
-
-        if not open_space_neighbors:
-            my_agent.reset_waiting()
-            return None, False, f"[{self.robot_id}] Open space clear. Nav2 runs uninterrupted."
-
-        safe_vel, conflict_detected = self.orca.compute_avoidance_velocity(
-            my_pos, my_vel, nav2_pref_vel, open_space_neighbors
-        )
-
-        if conflict_detected:
-            log_msg = (f"[{self.robot_id}] Open-space conflict detected! ORCA active. "
-                       f"Adjusted vel: pref={nav2_pref_vel} -> orca={safe_vel}. Override ACTIVE.")
-            return safe_vel, True, log_msg
-        else:
-            return None, False, f"[{self.robot_id}] Open space: ORCA active, no collision course. Nav2 clear."
+        # In open warehouse space, Nav2's local planner uses LiDAR (VoxelLayer) and
+        # DWB BaseObstacle critic to steer differential-drive robots around each other
+        # smoothly without artificial sideways velocity commands.
+        my_agent.reset_waiting()
+        return None, False, f"[{self.robot_id}] Open space clear of choke points. Nav2 DWB local planner active."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -709,11 +687,12 @@ class ConflictResolver(Node):
         self.my_pos = Vector2(0.0, 0.0)
         self.my_vel = Vector2(0.0, 0.0)
         self.nav2_pref_vel = Vector2(0.0, 0.0)
+        self.nav2_pref_angular_z: float = 0.0
         self.active_reservations: Dict[str, str] = {}
         self._requested_aisles: Set[str] = set()
         self._reservation_clock = 0
         self._last_reservation_renewal: Dict[str, float] = {}
-        self.declare_parameter('reservation_renewal_sec', 2.0)
+        self.declare_parameter('reservation_renewal_sec', 0.5)
         self.reservation_renewal_sec = self.get_parameter(
             'reservation_renewal_sec').get_parameter_value().double_value
         self._last_traffic_state = ''
@@ -830,6 +809,7 @@ class ConflictResolver(Node):
 
     def handle_nav2_cmd(self, msg: Twist):
         self.nav2_pref_vel = Vector2(msg.linear.x, msg.linear.y)
+        self.nav2_pref_angular_z = float(msg.angular.z)
 
     def handle_plan(self, msg: 'Path'):
         """Cache a Nav2 route and reserve its first single-lane aisle early."""
@@ -849,7 +829,7 @@ class ConflictResolver(Node):
                     self._request_approaching_aisle(segment_id)
                     break
 
-    def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 0.15) -> bool:
+    def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 1.5) -> bool:
         """
         Returns True if any waypoint in the cached Nav2 plan falls inside the
         given aisle segment (with an optional inflation margin).
@@ -1008,20 +988,12 @@ class ConflictResolver(Node):
         )
 
         if aisle_id:
-            self._renew_aisle_reservation(aisle_id, now)
+            if self.active_reservations.get(aisle_id) == self.robot_id:
+                self._renew_aisle_reservation(aisle_id, now)
+            else:
+                self._request_approaching_aisle(aisle_id)
 
-        # Release self-held reservations our current plan no longer needs
-        # (e.g. Nav2 re-planned away from the aisle after we were granted).
-        if self._plan_received:
-            for seg_id, holder_id in list(self.active_reservations.items()):
-                if holder_id != self.robot_id or seg_id == aisle_id:
-                    continue
-                if not self._plan_passes_through_aisle(seg_id, inflation=0.3):
-                    self.get_logger().info(
-                        f'[{self.robot_id}] [TRAFFIC] Plan no longer enters {seg_id}; '
-                        f'releasing moot reservation.'
-                    )
-                    self._release_aisle_reservation(seg_id)
+
         
         # Log position and aisle state changes
         if not hasattr(self, '_last_aisle_state'):
@@ -1059,11 +1031,23 @@ class ConflictResolver(Node):
         
         self._last_in_aisle = aisle_id
 
-        # Skip all conflict resolution when the robot is genuinely stationary:
-        # both Nav2 command and observed velocity below noise floor.  This
-        # prevents ORCA from activating while robots idle at the dock and stops
-        # spurious aisle reservations between navigation goals.
-        if self.nav2_pref_vel.length() < 0.02 and self.my_vel.length() < 0.02:
+        # Skip conflict resolution when the robot is genuinely stationary AND
+        # not near any single-lane aisle: both Nav2 command and observed
+        # velocity below noise floor, with no aisle in play. This prevents
+        # ORCA from activating while robots idle at the dock.
+        #
+        # Critically, this must NOT trigger while approaching/inside an
+        # aisle: a robot waiting for a reservation grant, or holding for PIBT,
+        # is *expected* to sit at velocity 0 — that used to make this branch
+        # fire every cycle once it settled, which returned before
+        # _request_approaching_aisle() (so a reservation might never even be
+        # requested) and before compute_override() (so the code never
+        # rechecked whether a grant had since arrived and it was safe to
+        # move). The robot would then freeze permanently at the first
+        # chokepoint it ever stopped at, regardless of later reservation
+        # state — exactly the case where two robots end up physically
+        # sharing an aisle with no active_reservations recorded for either.
+        if approaching_aisle is None and self.nav2_pref_vel.length() < 0.02 and self.my_vel.length() < 0.02:
             if self._last_traffic_state:
                 self.get_logger().info(
                     f'[{self.robot_id}] [SESSION] Robot stationary — conflict resolution paused.'
@@ -1095,8 +1079,10 @@ class ConflictResolver(Node):
         selected_vel = override_vel if is_active and override_vel is not None else self.nav2_pref_vel
         twist_msg = Twist()
         twist_msg.linear.x = float(selected_vel.x)
-        twist_msg.linear.y = float(selected_vel.y)
-        twist_msg.angular.z = 0.0
+        # Differential drive robots have zero lateral velocity
+        twist_msg.linear.y = 0.0
+        # Forward Nav2 angular velocity unless override requires a full stop (0.0)
+        twist_msg.angular.z = 0.0 if (is_active and override_vel is not None) else self.nav2_pref_angular_z
         self.drive_pub.publish(twist_msg)
         if is_active and override_vel is not None:
             self.override_pub.publish(twist_msg)
@@ -1111,6 +1097,7 @@ class ConflictResolver(Node):
         else:
             if self._last_traffic_state:
                 self.get_logger().info(f"[{self.robot_id}] Physical conflict resolved. Resuming normal Nav2 operation.")
+                self._publish_traffic_event('conflict_resolved', segment_id=approaching_aisle or '', detail='clear')
             self._last_traffic_state = ''
 
 

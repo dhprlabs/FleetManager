@@ -57,6 +57,9 @@ class StateManager(Node):
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
+        # Battery simulation parameters
+        self.declare_parameter('battery_drain_per_meter', 0.2)  # % lost per meter traveled
+        self.declare_parameter('dock_radius', 0.5)              # meters — within this range → full charge
 
         self.rate = self.get_parameter('update_rate').get_parameter_value().double_value
         self.beacon_rate = self.get_parameter('beacon_rate').get_parameter_value().double_value
@@ -65,11 +68,17 @@ class StateManager(Node):
         self.broadcaster_x = self.get_parameter('broadcaster_x').get_parameter_value().double_value
         self.broadcaster_y = self.get_parameter('broadcaster_y').get_parameter_value().double_value
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
+        self.battery_drain_per_meter = self.get_parameter('battery_drain_per_meter').get_parameter_value().double_value
+        self.dock_radius = self.get_parameter('dock_radius').get_parameter_value().double_value
         init_x = self.get_parameter('initial_x').get_parameter_value().double_value
         init_y = self.get_parameter('initial_y').get_parameter_value().double_value
 
         # Guard flag — suppress all publishing until AMCL delivers first pose
         self._amcl_initialized = False
+
+        # Battery tracking — last known position used to compute distance traveled
+        self._last_battery_x: float = init_x
+        self._last_battery_y: float = init_y
 
         # ── Fleet State Store (Phase 10.1: CRDT-backed) ───────────────────
         def _crdt_log(msg: str):
@@ -156,6 +165,26 @@ class StateManager(Node):
     # Own Pose Updates
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _update_battery(self, own, new_x: float, new_y: float):
+        """
+        Update battery based on distance traveled since last call.
+        - Drains by battery_drain_per_meter % per meter of movement.
+        - Resets to 100% when within dock_radius of the dock station.
+        """
+        dist = math.hypot(new_x - self._last_battery_x, new_y - self._last_battery_y)
+        if dist > 0.01:  # only drain for meaningful movement
+            own.battery = max(0.0, own.battery - dist * self.battery_drain_per_meter)
+            self._last_battery_x = new_x
+            self._last_battery_y = new_y
+
+        # Dock station charging — reset to full when close enough
+        dist_to_dock = math.hypot(new_x - self.dock_x, new_y - self.dock_y)
+        if dist_to_dock <= self.dock_radius and own.battery < 100.0:
+            own.battery = 100.0
+            self.get_logger().info(
+                f'[{self.robot_id}] Battery recharged to 100% at dock station.'
+            )
+
     def _update_pose_from_tf(self):
         target_frame = f'{self.robot_id}/base_footprint'
         try:
@@ -169,6 +198,7 @@ class StateManager(Node):
                     own.x, own.y, own.z = p.x, p.y, p.z
                     own.qx, own.qy, own.qz, own.qw = o.x, o.y, o.z, o.w
                     if changed:
+                        self._update_battery(own, p.x, p.y)
                         self.fs.update_own_robot(own)
                     if not self._amcl_initialized:
                         self._amcl_initialized = True
@@ -195,6 +225,7 @@ class StateManager(Node):
         own.x, own.y, own.z = p.x, p.y, p.z
         own.qx, own.qy, own.qz, own.qw = o.x, o.y, o.z, o.w
         if changed:
+            self._update_battery(own, p.x, p.y)
             self.fs.update_own_robot(own)
         if not self._amcl_initialized:
             self._amcl_initialized = True

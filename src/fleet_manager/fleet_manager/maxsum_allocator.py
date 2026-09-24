@@ -224,15 +224,13 @@ class DynamicReallocationCoordinator:
             triggers.append((TRIGGER_TASK_COMPLETED, affected))
 
         # 3b. Idle-robot safety trigger: if this robot has no owned tasks and
-        # unassigned available tasks exist, but TRIGGER_NEW_TASK never fires again
-        # (because last_known_task_states already has STATE_AVAILABLE), we inject
-        # a TRIGGER_NEW_TASK here so Max-Sum is always attempted for orphaned tasks.
+        # unassigned available tasks exist, inject TRIGGER_NEW_TASK so Max-Sum
+        # allocates the unassigned tasks to the available robots.
         own_tasks = [tid for tid, owner in task_owners.items() if owner == self.robot_id]
         if not own_tasks and not completed_tasks:
             orphan_avail = [
                 tid for tid, s in task_states.items()
                 if s in _ELIGIBLE_STATES and not task_owners.get(tid)
-                and tid not in self.last_known_task_owners
             ]
             if orphan_avail:
                 triggers.append((TRIGGER_NEW_TASK, orphan_avail))

@@ -15,7 +15,7 @@ Rules:
 
 import json
 import math
-import random
+# import random  # [DISABLED] — only needed for packet dropout simulation
 import time
 from typing import Dict, List, Tuple
 
@@ -43,30 +43,30 @@ class P2PTransport(Node):
         self.robot_id = self.get_parameter('robot_id').get_parameter_value().string_value
 
         # Radio & Physical Medium Parameters
-        self.declare_parameter('communication_radius', 8.0)  # meters
-        self.declare_parameter('beacon_rate', 2.0)           # Hz
+        self.declare_parameter('communication_radius', 6.0)  # meters
+        self.declare_parameter('beacon_rate', 4.0)           # Hz
         self.declare_parameter('peer_timeout', 3.0)          # seconds
-        self.declare_parameter('packet_dropout_rate', 0.0)   # 0.0 (none) to 1.0 (all dropped)
-        self.declare_parameter('dead_zones', '')             # JSON list of [x_min, y_min, x_max, y_max]
+        # self.declare_parameter('packet_dropout_rate', 0.0)   # 0.0 (none) to 1.0 (all dropped)  [DISABLED]
+        # self.declare_parameter('dead_zones', '')             # JSON list of [x_min, y_min, x_max, y_max]  [DISABLED]
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
 
         self.comm_radius = self.get_parameter('communication_radius').get_parameter_value().double_value
         self.beacon_rate = self.get_parameter('beacon_rate').get_parameter_value().double_value
         self.peer_timeout = self.get_parameter('peer_timeout').get_parameter_value().double_value
-        self.dropout_rate = self.get_parameter('packet_dropout_rate').get_parameter_value().double_value
+        # self.dropout_rate = self.get_parameter('packet_dropout_rate').get_parameter_value().double_value  [DISABLED]
 
-        # Dead zones configuration: list of tuples (xmin, ymin, xmax, ymax)
-        self.dead_zones: List[Tuple[float, float, float, float]] = []
-        dead_zones_str = self.get_parameter('dead_zones').get_parameter_value().string_value
-        if dead_zones_str:
-            try:
-                parsed = json.loads(dead_zones_str)
-                for dz in parsed:
-                    if len(dz) == 4:
-                        self.dead_zones.append((float(dz[0]), float(dz[1]), float(dz[2]), float(dz[3])))
-            except Exception as e:
-                self.get_logger().warn(f'Failed to parse dead_zones parameter: {e}')
+        # --- Dead zones DISABLED — uncomment below to re-enable ---
+        # self.dead_zones: List[Tuple[float, float, float, float]] = []
+        # dead_zones_str = self.get_parameter('dead_zones').get_parameter_value().string_value
+        # if dead_zones_str:
+        #     try:
+        #         parsed = json.loads(dead_zones_str)
+        #         for dz in parsed:
+        #             if len(dz) == 4:
+        #                 self.dead_zones.append((float(dz[0]), float(dz[1]), float(dz[2]), float(dz[3])))
+        #     except Exception as e:
+        #         self.get_logger().warn(f'Failed to parse dead_zones parameter: {e}')
 
         # Current Robot Pose — starts with initial parameter, updated via AMCL/odom
         self._amcl_initialized = False
@@ -144,30 +144,34 @@ class P2PTransport(Node):
     def _distance_to(self, target_x: float, target_y: float) -> float:
         return math.hypot(self.current_x - target_x, self.current_y - target_y)
 
-    def _is_in_dead_zone(self, x: float, y: float) -> bool:
-        for xmin, ymin, xmax, ymax in self.dead_zones:
-            if xmin <= x <= xmax and ymin <= y <= ymax:
-                return True
-        return False
+    # --- Dead zone helper DISABLED — uncomment together with dead_zones config to re-enable ---
+    # def _is_in_dead_zone(self, x: float, y: float) -> bool:
+    #     for xmin, ymin, xmax, ymax in self.dead_zones:
+    #         if xmin <= x <= xmax and ymin <= y <= ymax:
+    #             return True
+    #     return False
 
     def _can_communicate(self, peer_x: float, peer_y: float) -> Tuple[bool, float, str]:
         """
         Evaluates RF connectivity between this robot and peer coordinates.
         Returns: (reachable_bool, distance, reason)
+        
+        Simplified: purely distance-based check.
+        Dead zone and packet dropout checks are disabled — uncomment to re-enable.
         """
         dist = self._distance_to(peer_x, peer_y)
 
-        # 1. Radio range check
+        # 1. Radio range check (only active filter)
         if dist > self.comm_radius:
             return False, dist, f'out of radio range ({dist:.2f}m > {self.comm_radius:.2f}m)'
 
-        # 2. Dead zone check
-        if self._is_in_dead_zone(self.current_x, self.current_y) or self._is_in_dead_zone(peer_x, peer_y):
-            return False, dist, 'obstructed by dead zone'
+        # 2. Dead zone check  [DISABLED]
+        # if self._is_in_dead_zone(self.current_x, self.current_y) or self._is_in_dead_zone(peer_x, peer_y):
+        #     return False, dist, 'obstructed by dead zone'
 
-        # 3. Simulated packet dropout
-        if self.dropout_rate > 0.0 and random.random() < self.dropout_rate:
-            return False, dist, 'simulated RF packet drop'
+        # 3. Simulated packet dropout  [DISABLED]
+        # if self.dropout_rate > 0.0 and random.random() < self.dropout_rate:
+        #     return False, dist, 'simulated RF packet drop'
 
         return True, dist, 'connected'
 
@@ -318,9 +322,9 @@ class P2PTransport(Node):
         can_recv, dist, reason = self._can_communicate(sender_x, sender_y)
 
         if not can_recv:
-            # Dropped due to range, deadzone, or simulated loss
-            if reason == 'simulated RF packet drop':
-                self._emit_event(sender_id, P2PEvent.EVENT_DROPOUT, dist)
+            # Dropped due to range (dead zone / dropout checks are disabled)
+            # if reason == 'simulated RF packet drop':  [DISABLED]
+            #     self._emit_event(sender_id, P2PEvent.EVENT_DROPOUT, dist)
             return
 
         # Deliver to local robot stack

@@ -551,6 +551,13 @@ class ConflictCoordinator:
             dy = max(spec['y_min'] - pos.y, 0.0, pos.y - spec['y_max'])
             dist = math.hypot(dx, dy)
             if dist < threshold:
+                target_dx = max(spec['x_min'] - target.x, 0.0, target.x - spec['x_max'])
+                target_dy = max(spec['y_min'] - target.y, 0.0, target.y - spec['y_max'])
+                target_dist = math.hypot(target_dx, target_dy)
+                # Only consider approaching if the robot is actually moving CLOSER to the aisle
+                # (ignores robots that are moving away, moving parallel, or stationary/turning)
+                if target_dist >= dist - 0.05:
+                    continue
                 return seg_id
         return None
 
@@ -692,6 +699,7 @@ class ConflictResolver(Node):
         self._requested_aisles: Set[str] = set()
         self._reservation_clock = 0
         self._last_reservation_renewal: Dict[str, float] = {}
+        self._aisle_release_times: Dict[str, float] = {}
         self.declare_parameter('reservation_renewal_sec', 0.5)
         self.reservation_renewal_sec = self.get_parameter(
             'reservation_renewal_sec').get_parameter_value().double_value
@@ -804,6 +812,9 @@ class ConflictResolver(Node):
         if msg.robot_id == self.robot_id:
             self.my_pos = pos
             self.my_vel = vel
+            if msg.status == RobotState.STATUS_IDLE and not msg.current_task_id:
+                self._nav_plan_waypoints.clear()
+                self._plan_received = False
         else:
             self.peer_states[msg.robot_id] = (pos, vel)
 
@@ -819,6 +830,36 @@ class ConflictResolver(Node):
         ]
         if self._nav_plan_waypoints:
             self._plan_received = True
+
+            # Evict any previously-requested aisles the new route no longer passes
+            # through.  This covers the pickup→delivery transition: the delivery
+            # route may not need the same aisle as the pickup route, so we release
+            # the stale reservation request so the robot isn't stuck waiting for a
+            # grant it no longer needs.
+            #
+            # IMPORTANT: if the robot is currently INSIDE the aisle (aisle_id is
+            # set), do NOT release the reservation even if the new plan omits it.
+            # The robot still needs the reservation to physically exit; the
+            # auto-release in conflict_check will fire once it is clear.
+            current_aisle = self.coordinator.is_in_single_lane_aisle(self.my_pos, margin=0.1)
+            for seg_id in list(self._requested_aisles):
+                if not self._plan_passes_through_aisle(seg_id):
+                    if current_aisle == seg_id:
+                        # Still physically inside — keep the reservation.
+                        self.get_logger().info(
+                            f'[{self.robot_id}] [PLAN] New route no longer uses {seg_id} '
+                            f'but robot is still inside — holding reservation until exit.'
+                        )
+                        continue
+                    self.get_logger().info(
+                        f'[{self.robot_id}] [PLAN] New route no longer uses {seg_id} — '
+                        f'clearing stale reservation request.'
+                    )
+                    self._requested_aisles.discard(seg_id)
+                    # Release the held reservation only if we are clear of the aisle.
+                    if self.active_reservations.get(seg_id) == self.robot_id:
+                        self._release_aisle_reservation(seg_id)
+
             # A route, rather than just proximity to an entrance, tells us
             # which choke point the robot is committed to using.  Claim the
             # first aisle on that route now; later aisles remain available
@@ -829,12 +870,13 @@ class ConflictResolver(Node):
                     self._request_approaching_aisle(segment_id)
                     break
 
-    def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 1.5) -> bool:
+
+    def _plan_passes_through_aisle(self, seg_id: str, inflation: float = 0.0) -> bool:
         """
-        Returns True if any waypoint in the cached Nav2 plan falls inside the
-        given aisle segment (with an optional inflation margin).
-        Returns False when no plan has been received yet — this prevents phantom
-        reservations during startup or between goal submissions.
+        Returns True if any upcoming waypoint in the cached Nav2 plan falls inside the
+        given aisle segment.
+        Returns False when no plan has been received yet or when remaining path does
+        not enter the aisle.
         """
         if not self._plan_received or not self._nav_plan_waypoints:
             # No plan available yet — refuse reservation to avoid ghost bookings.
@@ -846,7 +888,17 @@ class ConflictResolver(Node):
         x_max = spec['x_max'] + inflation
         y_min = spec['y_min'] - inflation
         y_max = spec['y_max'] + inflation
-        for (wx, wy) in self._nav_plan_waypoints:
+
+        # Find index of closest waypoint to current position to only check remaining path
+        closest_idx = 0
+        min_dist_sq = float('inf')
+        for i, (wx, wy) in enumerate(self._nav_plan_waypoints):
+            d2 = (wx - self.my_pos.x) ** 2 + (wy - self.my_pos.y) ** 2
+            if d2 < min_dist_sq:
+                min_dist_sq = d2
+                closest_idx = i
+
+        for (wx, wy) in self._nav_plan_waypoints[closest_idx:]:
             if x_min <= wx <= x_max and y_min <= wy <= y_max:
                 return True
         return False
@@ -855,6 +907,11 @@ class ConflictResolver(Node):
         """Request each approach once; ReservationManager owns arbitration."""
         if segment_id in self._requested_aisles:
             return
+        # If this robot recently released this aisle (within 2s), don't immediately re-request
+        # unless its upcoming plan clearly passes through the aisle
+        if time.time() - self._aisle_release_times.get(segment_id, 0.0) < 2.0:
+            if not self._plan_passes_through_aisle(segment_id):
+                return
         # Gate on the Nav2 plan once one exists.  Before the first plan
         # arrives we still request so the grant can land before the robot
         # reaches the aisle (the robot waits outside until granted anyway).
@@ -925,6 +982,7 @@ class ConflictResolver(Node):
         # Clear from requested set so it can be re-requested if needed
         self._requested_aisles.discard(segment_id)
         self._last_reservation_renewal.pop(segment_id, None)
+        self._aisle_release_times[segment_id] = time.time()
 
     def _renew_aisle_reservation(self, segment_id: str, now: float):
         """Keep a granted aisle lease alive while the holder is traversing it.
@@ -967,24 +1025,30 @@ class ConflictResolver(Node):
         # ─────────────────────────────────────────────────────────────────────
         # SESSION LOGGING: Track robot position, aisle state, and velocities
         # ─────────────────────────────────────────────────────────────────────
-        aisle_id = self.coordinator.is_in_single_lane_aisle(self.my_pos)
+        aisle_id = self.coordinator.is_in_single_lane_aisle(self.my_pos, margin=0.1)
         approaching_aisle = aisle_id or self.coordinator.is_approaching_aisle(
             self.my_pos, self.my_pos + self.nav2_pref_vel * 2.0, threshold=0.8
         )
+
+        # If outside the aisle and recently released it, ignore spurious approach detection
+        # unless our plan genuinely enters deep into the aisle.
+        if aisle_id is None and approaching_aisle is not None:
+            recently_released = (now - self._aisle_release_times.get(approaching_aisle, 0.0)) < 5.0
+            if recently_released and not self._plan_passes_through_aisle(approaching_aisle, inflation=0.0):
+                approaching_aisle = None
 
         # Plan-awareness: does our Nav2 plan actually enter the detected aisle?
         # A robot merely passing NEAR an aisle its plan never enters must
         # neither reserve it nor stop because another robot holds it.
         plan_enters_aisle = (
-            self._plan_passes_through_aisle(approaching_aisle)
+            self._plan_passes_through_aisle(approaching_aisle, inflation=0.0)
             if approaching_aisle else False
         )
-        # Respect reservation logic when: inside the aisle, the plan enters
-        # it, or no plan has arrived yet (conservatively hold position while
-        # Nav2 is still computing the first plan for a new goal).
+        # Respect reservation logic when: inside the aisle, or the plan enters it.
+        # A robot outside the aisle without a plan entering it NEVER stops for reservations.
         respect_reservations = (
             approaching_aisle is not None
-            and (aisle_id is not None or plan_enters_aisle or not self._plan_received)
+            and (aisle_id is not None or plan_enters_aisle)
         )
 
         if aisle_id:

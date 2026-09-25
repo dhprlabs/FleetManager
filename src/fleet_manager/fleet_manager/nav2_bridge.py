@@ -259,6 +259,7 @@ class TaskExecutionManager(Node):
             String, '/fleet/traffic_events', self._handle_traffic_event_msg, 10
         )
         self._current_held_aisle: Optional[str] = None
+        self._waiting_for_aisle: Optional[str] = None
 
         # Aisles whose lease is still held because the robot has not physically
         # left them yet (released by _check_pending_aisle_release once clear,
@@ -897,6 +898,8 @@ class TaskExecutionManager(Node):
 
         if msg.state == Reservation.STATE_GRANTED:
             self._current_held_aisle = seg
+            if self._waiting_for_aisle == seg:
+                self._waiting_for_aisle = None
             # We hold this aisle again: cancel any pending exit-release for it.
             self._pending_release_segs.discard(seg)
             if self._paused_for_traffic and self._saved_target_pose is not None:
@@ -938,6 +941,23 @@ class TaskExecutionManager(Node):
             # ── Blocking events ───────────────────────────────────────────────
             _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance')
             if event in _BLOCKING_EVENTS:
+                seg_id = payload.get('segment_id')
+                if event == 'pibt_wait' and seg_id:
+                    # Only track waiting_for_aisle if robot's target or current position is in that aisle
+                    target_seg = None
+                    if self._saved_target_pose is not None:
+                        target_seg = self._get_aisle_at_point(
+                            self._saved_target_pose.pose.position.x,
+                            self._saved_target_pose.pose.position.y
+                        )
+                    robot_in_seg = bool(self._is_within_aisle(seg_id, self.aisle_exit_margin))
+                    if robot_in_seg or target_seg == seg_id:
+                        self._waiting_for_aisle = seg_id
+                    else:
+                        self._waiting_for_aisle = None
+                elif event == 'orca_avoidance':
+                    self._waiting_for_aisle = None
+
                 if not self._paused_for_traffic and self.current_goal_handle is not None:
                     # First block: cancel active Nav2 goal and enter pause.
                     self.get_logger().warn(
@@ -961,16 +981,48 @@ class TaskExecutionManager(Node):
             # ── Clearing events ───────────────────────────────────────────────
             elif event in ('conflict_resolved', 'traffic_clear'):
                 if self._paused_for_traffic and self._saved_target_pose is not None:
-                    # Only resume when a reservation grant has already been received.
-                    # Without a grant the aisle may still be occupied by another robot.
-                    # The primary resume path is _handle_traffic_reserve_msg (grant);
-                    # this path acts as a secondary confirmation signal.
-                    if self._current_held_aisle:
+                    target_seg = self._get_aisle_at_point(
+                        self._saved_target_pose.pose.position.x,
+                        self._saved_target_pose.pose.position.y
+                    )
+                    waiting_aisle = self._waiting_for_aisle or target_seg
+
+                    # Only require holding a reservation if the robot's target actually
+                    # requires entering that aisle OR the robot is currently inside it.
+                    robot_in_waiting_aisle = (
+                        bool(waiting_aisle and self._is_within_aisle(waiting_aisle, self.aisle_exit_margin))
+                    )
+                    target_in_waiting_aisle = (target_seg == waiting_aisle and waiting_aisle is not None)
+                    needs_grant = target_in_waiting_aisle or robot_in_waiting_aisle
+
+                    if needs_grant:
+                        if self._current_held_aisle and self._current_held_aisle == waiting_aisle:
+                            self.get_logger().info(
+                                f'[{self.robot_id}] [TRAFFIC] Conflict cleared + grant confirmed for {waiting_aisle}. '
+                                f'Resuming navigation to {self._saved_target_name}.'
+                            )
+                            self._paused_for_traffic = False
+                            self._waiting_for_aisle = None
+                            target_pose = self._saved_target_pose
+                            target_name = self._saved_target_name
+                            on_reached = self._saved_on_reached
+                            self._saved_target_pose = None
+                            self._saved_target_name = None
+                            self._saved_on_reached = None
+                            self._dispatch_navigation(target_pose, target_name, on_reached)
+                        else:
+                            self.get_logger().info(
+                                f'[{self.robot_id}] [TRAFFIC] "{event}" received but waiting for '
+                                f'aisle reservation grant for {waiting_aisle} — staying paused until grant arrives.'
+                            )
+                    else:
+                        # Open space conflict or vacated aisle cleared: safe to resume immediately
                         self.get_logger().info(
-                            f'[{self.robot_id}] [TRAFFIC] Conflict cleared + grant confirmed. '
-                            f'Resuming navigation to {self._saved_target_name}.'
+                            f'[{self.robot_id}] [TRAFFIC] Conflict cleared for {waiting_aisle or "open space"} '
+                            f'(target not in aisle) — resuming navigation to {self._saved_target_name}.'
                         )
                         self._paused_for_traffic = False
+                        self._waiting_for_aisle = None
                         target_pose = self._saved_target_pose
                         target_name = self._saved_target_name
                         on_reached = self._saved_on_reached
@@ -978,11 +1030,6 @@ class TaskExecutionManager(Node):
                         self._saved_target_name = None
                         self._saved_on_reached = None
                         self._dispatch_navigation(target_pose, target_name, on_reached)
-                    else:
-                        self.get_logger().info(
-                            f'[{self.robot_id}] [TRAFFIC] "{event}" received but no '
-                            f'reservation grant yet — staying paused until grant arrives.'
-                        )
         except Exception:
             pass
 
@@ -1181,6 +1228,10 @@ class TaskExecutionManager(Node):
         self._saved_target_pose = target_pose
         self._saved_target_name = target_name
         self._saved_on_reached = on_reached
+        # Clear stale aisle-wait from a previous navigation leg (e.g. pickup→delivery
+        # transition). If the NEW route also needs an aisle, a fresh pibt_wait from
+        # ConflictResolver will re-populate _waiting_for_aisle.
+        self._waiting_for_aisle = None
         if self.enable_nav2 and self.nav_client.wait_for_server(timeout_sec=0.5):
             goal_msg = NavigateToPose.Goal()
             goal_msg.pose = target_pose

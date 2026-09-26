@@ -257,12 +257,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'dock_x',
-            default_value='9.53',
+            default_value='10.0',
             description='X coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(
             'dock_y',
-            default_value='-1.526',
+            default_value='0.0',
             description='Y coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(

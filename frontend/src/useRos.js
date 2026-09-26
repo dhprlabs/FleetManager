@@ -216,8 +216,8 @@ export const DEFAULT_SPAWN_POSES = {
 
 // ── Default Broadcaster / Dock Station Configuration ───────────────────────
 export const DEFAULT_DOCK_CONFIG = {
-  rosX: 9.53,
-  rosY: -1.526,
+  rosX: 10.0,
+  rosY: 0.0,
   radiusMeters: 6.0,
 };
 

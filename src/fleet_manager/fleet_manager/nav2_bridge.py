@@ -88,8 +88,8 @@ class TaskExecutionManager(Node):
         self.declare_parameter('enable_pickup_validation', True)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
-        self.declare_parameter('broadcaster_x', 9.53)
-        self.declare_parameter('broadcaster_y', -1.526)
+        self.declare_parameter('broadcaster_x', 10.0)
+        self.declare_parameter('broadcaster_y', 0.0)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -942,7 +942,11 @@ class TaskExecutionManager(Node):
                 return
 
             # ── Blocking events ───────────────────────────────────────────────
-            _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance', 'apf_avoidance')
+            # APF is a continuous command override handled by ConflictResolver's
+            # cmd_vel mux.  It must not cancel Nav2's goal: Nav2 needs to keep
+            # producing its preferred velocity so APF can hand control back as
+            # soon as nearby robots are clear.
+            _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance')
             if event in _BLOCKING_EVENTS:
                 seg_id = payload.get('segment_id')
                 if event == 'pibt_wait' and seg_id:
@@ -958,7 +962,7 @@ class TaskExecutionManager(Node):
                         self._waiting_for_aisle = seg_id
                     else:
                         self._waiting_for_aisle = None
-                elif event in ('orca_avoidance', 'apf_avoidance'):
+                elif event == 'orca_avoidance':
                     self._waiting_for_aisle = None
 
                 if not self._paused_for_traffic and self.current_goal_handle is not None:

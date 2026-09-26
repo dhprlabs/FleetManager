@@ -46,8 +46,8 @@ class TaskBroadcaster(Node):
         self.declare_parameter('publish_rate', 1.0)
         self.declare_parameter('auto_generate_sample_tasks', False)
         self.declare_parameter('warehouse_frame', 'map')
-        self.declare_parameter('dock_x', 9.53)
-        self.declare_parameter('dock_y', -1.526)
+        self.declare_parameter('dock_x', 10.0)
+        self.declare_parameter('dock_y', 0.0)
         self.declare_parameter('broadcast_radius', 6.0)
 
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value

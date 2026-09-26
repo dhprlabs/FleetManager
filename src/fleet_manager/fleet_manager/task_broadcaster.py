@@ -13,7 +13,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 import json
+import math
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
 from fleet_interfaces.msg import Task, TaskPool, P2PMessage
 from fleet_interfaces.srv import CreateTask, GenerateSampleTasks
 
@@ -44,8 +46,8 @@ class TaskBroadcaster(Node):
         self.declare_parameter('publish_rate', 1.0)
         self.declare_parameter('auto_generate_sample_tasks', False)
         self.declare_parameter('warehouse_frame', 'map')
-        self.declare_parameter('dock_x', 5.0)
-        self.declare_parameter('dock_y', 12.0)
+        self.declare_parameter('dock_x', 9.53)
+        self.declare_parameter('dock_y', -1.526)
         self.declare_parameter('broadcast_radius', 6.0)
 
         self.publish_rate = self.get_parameter('publish_rate').get_parameter_value().double_value
@@ -80,6 +82,9 @@ class TaskBroadcaster(Node):
         self.batch_task_sub = self.create_subscription(
             TaskPool, '/fleet/broadcast_tasks', self.handle_broadcast_tasks, 10
         )
+        self.dock_config_sub = self.create_subscription(
+            String, '/fleet/dock_config', self._handle_dock_config, 10
+        )
 
         # Services
         self.create_task_srv = self.create_service(
@@ -92,6 +97,21 @@ class TaskBroadcaster(Node):
         # Predefined warehouse tasks
         if self.auto_generate:
             self.generate_sample_tasks(count=5)
+
+    def _handle_dock_config(self, msg: String):
+        """Apply a broadcaster position sent by the frontend."""
+        try:
+            config = json.loads(msg.data)
+            x, y = float(config['x']), float(config['y'])
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise ValueError('coordinates must be finite')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'Ignoring invalid dock configuration: {exc}')
+            return
+
+        self.dock_x, self.dock_y = x, y
+        self.get_logger().info(f'Task broadcaster moved to ({x:.3f}, {y:.3f})')
+        self.publish_task_pool()
 
         # Periodic timer for task pool broadcast
         self.timer = self.create_timer(1.0 / self.publish_rate, self.publish_task_pool)

@@ -18,6 +18,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from std_msgs.msg import String
 from fleet_interfaces.msg import Task, TaskPool, WorldView, P2PMessage, RobotState
 from fleet_manager.fleet_state import FleetState, TaskEntry
 from fleet_manager.p2p_client import P2PClient
@@ -41,8 +42,8 @@ class TaskManager(Node):
         self.declare_parameter('robot_id', default_id)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
-        self.declare_parameter('broadcaster_x', 5.0)
-        self.declare_parameter('broadcaster_y', 12.0)
+        self.declare_parameter('broadcaster_x', 9.53)
+        self.declare_parameter('broadcaster_y', -1.526)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -74,6 +75,7 @@ class TaskManager(Node):
         self.create_subscription(PoseWithCovarianceStamped, 'amcl_pose', self._handle_amcl_pose, 10)
         self.create_subscription(TaskPool, '/fleet/task_pool', self._handle_task_pool, latching_qos)
         self.create_subscription(Task, '/fleet/task_events', self._handle_task_event, 10)
+        self.create_subscription(String, '/fleet/dock_config', self._handle_dock_config, 10)
 
         # ── P2P Client ─────────────────────────────────────────────────────
         self.p2p = P2PClient(node=self)
@@ -91,6 +93,18 @@ class TaskManager(Node):
     # ──────────────────────────────────────────────────────────────────────────
     # Ingest from Task Broadcaster
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _handle_dock_config(self, msg: String):
+        """Update the task-broadcaster position used for radio-range checks."""
+        try:
+            config = json.loads(msg.data)
+            x, y = float(config['x']), float(config['y'])
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise ValueError('coordinates must be finite')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'Ignoring invalid dock configuration: {exc}')
+            return
+        self.broadcaster_x, self.broadcaster_y = x, y
 
     def _handle_robot_state(self, msg: RobotState):
         self.current_x = msg.current_pose.pose.position.x

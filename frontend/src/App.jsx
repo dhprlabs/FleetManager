@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import warehouseMap from "./asset/logistics_warehouse.png";
-import { useRos, rosToSvg, svgToRos, DEFAULT_AISLES, normalizeAisles } from "./useRos";
+import { useRos, rosToSvg, svgToRos, MAP_CONFIG, DEFAULT_AISLES, normalizeAisles } from "./useRos";
 
-const baseViewBox = { x: 0, y: 0, w: 485, h: 484 };
+const baseViewBox = { x: 0, y: 0, w: MAP_CONFIG.width, h: MAP_CONFIG.height };
 const axisEnd = 600;
 const now = 220;
 const colors = {
@@ -23,19 +23,19 @@ const displayFont = { fontFamily: "Space Grotesk, sans-serif" };
 
 /** Derive per-robot ORCA/PIBT status from last N traffic events */
 function useAlgoOverlay(trafficEvents) {
-  return useMemo(() => {
-    // Keep only the last 25 events; stale info fades automatically
-    const recent = trafficEvents.slice(-25);
-    const orca  = {};   // robot_id → true if ORCA active right now
-    const pibt  = {};   // robot_id → { waiting: bool, segment_id: str }
-    recent.forEach((ev) => {
-      if (ev.event === 'orca_avoidance')  orca[ev.robot_id]  = true;
-      if (ev.event === 'pibt_wait')       pibt[ev.robot_id]  = { waiting: true, segment_id: ev.segment_id || '' };
-      // A 'reservation_granted' or resolved event clears PIBT wait for that robot
-      if (ev.event === 'reservation_granted' && pibt[ev.robot_id]) pibt[ev.robot_id].waiting = false;
-    });
-    return { orca, pibt };
-  }, [trafficEvents]);
+    return useMemo(() => {
+        // Keep only the last 25 events; stale info fades automatically
+        const recent = trafficEvents.slice(-25);
+        const orca = {};   // robot_id → true if ORCA active right now
+        const pibt = {};   // robot_id → { waiting: bool, segment_id: str }
+        recent.forEach((ev) => {
+            if (ev.event === 'orca_avoidance') orca[ev.robot_id] = true;
+            if (ev.event === 'pibt_wait') pibt[ev.robot_id] = { waiting: true, segment_id: ev.segment_id || '' };
+            // A 'reservation_granted' or resolved event clears PIBT wait for that robot
+            if (ev.event === 'reservation_granted' && pibt[ev.robot_id]) pibt[ev.robot_id].waiting = false;
+        });
+        return { orca, pibt };
+    }, [trafficEvents]);
 }
 
 
@@ -149,331 +149,331 @@ function RobotStatusPanel({ robots }) {
  * Shows a pulsing ring when a robot is actively returning to its dock.
  */
 function DockStationLayer({ robots, dockStations, visible }) {
-  if (!visible) return null;
-  return (
-    <g id="dock-station-layer">
-      {robots.map((robot) => {
-        const dock = dockStations[robot.id];
-        if (!dock) return null;
-        const cx = dock.svgX;
-        const cy = dock.svgY;
-        const robotColor = robot.color || '#2f6f5e';
-        // Is this robot currently in dock-return mode? (idle + no task)
-        const returning = robot.online && !robot.task && robot.task !== '—';
-        return (
-          <g key={`dock-${robot.id}`}>
-            {/* Outer subtle ring */}
-            <circle cx={cx} cy={cy} r="10" fill={robotColor} fillOpacity="0.08"
-              stroke={robotColor} strokeWidth="1" strokeOpacity="0.35" strokeDasharray="3 2" />
-            {/* Pulsing ring when robot is returning */}
-            {returning && (
-              <circle cx={cx} cy={cy} r="14" fill="none"
-                stroke={robotColor} strokeWidth="1.2" strokeOpacity="0.55"
-                style={{ animation: 'pibtBlink 1.4s step-start infinite' }} />
-            )}
-            {/* Home icon background disc */}
-            <circle cx={cx} cy={cy} r="7" fill={robotColor} fillOpacity="0.9" />
-            {/* Home symbol (simplified SVG house) */}
-            <g transform={`translate(${cx - 4.5}, ${cy - 5})`} fill="white">
-              {/* Roof */}
-              <polygon points="4.5,0 9,4.5 0,4.5" fillOpacity="0.95" />
-              {/* Walls */}
-              <rect x="1.5" y="4.5" width="6" height="5" fillOpacity="0.9" />
-              {/* Door */}
-              <rect x="3.2" y="6.5" width="2.6" height="3" fill={robotColor} fillOpacity="0.8" />
-            </g>
-            {/* Robot ID label */}
-            <text x={cx} y={cy + 18} fill={robotColor} fontSize="7" fontWeight="700"
-              textAnchor="middle" fontFamily="IBM Plex Sans, sans-serif"
-              style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}>
-              {robot.id}
-            </text>
-          </g>
-        );
-      })}
-    </g>
-  );
+    if (!visible) return null;
+    return (
+        <g id="dock-station-layer">
+            {robots.map((robot) => {
+                const dock = dockStations[robot.id];
+                if (!dock) return null;
+                const cx = dock.svgX;
+                const cy = dock.svgY;
+                const robotColor = robot.color || '#2f6f5e';
+                // Is this robot currently in dock-return mode? (idle + no task)
+                const returning = robot.online && !robot.task && robot.task !== '—';
+                return (
+                    <g key={`dock-${robot.id}`}>
+                        {/* Outer subtle ring */}
+                        <circle cx={cx} cy={cy} r="10" fill={robotColor} fillOpacity="0.08"
+                            stroke={robotColor} strokeWidth="1" strokeOpacity="0.35" strokeDasharray="3 2" />
+                        {/* Pulsing ring when robot is returning */}
+                        {returning && (
+                            <circle cx={cx} cy={cy} r="14" fill="none"
+                                stroke={robotColor} strokeWidth="1.2" strokeOpacity="0.55"
+                                style={{ animation: 'pibtBlink 1.4s step-start infinite' }} />
+                        )}
+                        {/* Home icon background disc */}
+                        <circle cx={cx} cy={cy} r="7" fill={robotColor} fillOpacity="0.9" />
+                        {/* Home symbol (simplified SVG house) */}
+                        <g transform={`translate(${cx - 4.5}, ${cy - 5})`} fill="white">
+                            {/* Roof */}
+                            <polygon points="4.5,0 9,4.5 0,4.5" fillOpacity="0.95" />
+                            {/* Walls */}
+                            <rect x="1.5" y="4.5" width="6" height="5" fillOpacity="0.9" />
+                            {/* Door */}
+                            <rect x="3.2" y="6.5" width="2.6" height="3" fill={robotColor} fillOpacity="0.8" />
+                        </g>
+                        {/* Robot ID label */}
+                        <text x={cx} y={cy + 18} fill={robotColor} fontSize="7" fontWeight="700"
+                            textAnchor="middle" fontFamily="IBM Plex Sans, sans-serif"
+                            style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}>
+                            {robot.id}
+                        </text>
+                    </g>
+                );
+            })}
+        </g>
+    );
 }
 
 // ─── NavPathLayer ─────────────────────────────────────────────────────────────
 /** Renders the Nav2 planned route polyline for each robot as an animated dashed path */
 function NavPathLayer({ robots, navPaths, visible }) {
-  if (!visible) return null;
-  return (
-    <g id="nav-path-layer">
-      {robots.map((robot) => {
-        const pts = navPaths[robot.id];
-        if (!pts || pts.length < 2) return null;
-        const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-        return (
-          <g key={`navpath-${robot.id}`}>
-            {/* Glow under-layer */}
-            <path
-              d={d}
-              fill="none"
-              stroke={robot.color}
-              strokeWidth="4"
-              strokeOpacity="0.12"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {/* Animated dash line */}
-            <path
-              d={d}
-              fill="none"
-              stroke={robot.color}
-              strokeWidth="1.6"
-              strokeOpacity="0.78"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeDasharray="5 4"
-              style={{ animation: 'navPathMarch 0.8s linear infinite' }}
-            />
-            {/* Destination arrowhead at last point */}
-            {(() => {
-              const last = pts[pts.length - 1];
-              const prev = pts[pts.length - 2];
-              const angle = Math.atan2(last.y - prev.y, last.x - prev.x) * (180 / Math.PI);
-              return (
-                <polygon
-                  points="0,-5 4,4 -4,4"
-                  fill={robot.color}
-                  fillOpacity="0.9"
-                  stroke="white"
-                  strokeWidth="1"
-                  transform={`translate(${last.x},${last.y}) rotate(${angle + 90})`}
-                />
-              );
-            })()}
-            {/* Small label */}
-            {pts.length > 3 && (() => {
-              const mid = pts[Math.floor(pts.length / 2)];
-              return (
-                <text
-                  x={mid.x + 3}
-                  y={mid.y - 4}
-                  fill={robot.color}
-                  fontSize="7"
-                  fontWeight="700"
-                  fontFamily="IBM Plex Sans, sans-serif"
-                  style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
-                >
-                  {robot.id} nav2
-                </text>
-              );
-            })()}
-          </g>
-        );
-      })}
-    </g>
-  );
+    if (!visible) return null;
+    return (
+        <g id="nav-path-layer">
+            {robots.map((robot) => {
+                const pts = navPaths[robot.id];
+                if (!pts || pts.length < 2) return null;
+                const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
+                return (
+                    <g key={`navpath-${robot.id}`}>
+                        {/* Glow under-layer */}
+                        <path
+                            d={d}
+                            fill="none"
+                            stroke={robot.color}
+                            strokeWidth="4"
+                            strokeOpacity="0.12"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                        />
+                        {/* Animated dash line */}
+                        <path
+                            d={d}
+                            fill="none"
+                            stroke={robot.color}
+                            strokeWidth="1.6"
+                            strokeOpacity="0.78"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeDasharray="5 4"
+                            style={{ animation: 'navPathMarch 0.8s linear infinite' }}
+                        />
+                        {/* Destination arrowhead at last point */}
+                        {(() => {
+                            const last = pts[pts.length - 1];
+                            const prev = pts[pts.length - 2];
+                            const angle = Math.atan2(last.y - prev.y, last.x - prev.x) * (180 / Math.PI);
+                            return (
+                                <polygon
+                                    points="0,-5 4,4 -4,4"
+                                    fill={robot.color}
+                                    fillOpacity="0.9"
+                                    stroke="white"
+                                    strokeWidth="1"
+                                    transform={`translate(${last.x},${last.y}) rotate(${angle + 90})`}
+                                />
+                            );
+                        })()}
+                        {/* Small label */}
+                        {pts.length > 3 && (() => {
+                            const mid = pts[Math.floor(pts.length / 2)];
+                            return (
+                                <text
+                                    x={mid.x + 3}
+                                    y={mid.y - 4}
+                                    fill={robot.color}
+                                    fontSize="7"
+                                    fontWeight="700"
+                                    fontFamily="IBM Plex Sans, sans-serif"
+                                    style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
+                                >
+                                    {robot.id} nav2
+                                </text>
+                            );
+                        })()}
+                    </g>
+                );
+            })}
+        </g>
+    );
 }
 
 // ─── OrcaVectorLayer ─────────────────────────────────────────────────────────
 /** Shows a pulsing red halo + avoidance arrow on robots currently under ORCA */
 function OrcaVectorLayer({ robots, orcaActive, visible }) {
-  if (!visible) return null;
-  return (
-    <g id="orca-layer">
-      {robots.filter((r) => orcaActive[r.id]).map((robot) => (
-        <g key={`orca-${robot.id}`}>
-          {/* Animated warning ring */}
-          <circle
-            cx={robot.x}
-            cy={robot.y}
-            r="16"
-            fill="none"
-            stroke="#ef4444"
-            strokeWidth="1.5"
-            strokeOpacity="0.75"
-            strokeDasharray="3 3"
-            style={{ animation: 'orcaPulse 1s ease-in-out infinite' }}
-          />
-          {/* ORCA badge */}
-          <rect
-            x={robot.x - 14}
-            y={robot.y - 28}
-            width="28"
-            height="11"
-            rx="3"
-            fill="#ef4444"
-            fillOpacity="0.92"
-          />
-          <text
-            x={robot.x}
-            y={robot.y - 20}
-            fill="white"
-            fontSize="7"
-            fontWeight="800"
-            textAnchor="middle"
-            fontFamily="IBM Plex Sans, sans-serif"
-          >
-            ORCA
-          </text>
+    if (!visible) return null;
+    return (
+        <g id="orca-layer">
+            {robots.filter((r) => orcaActive[r.id]).map((robot) => (
+                <g key={`orca-${robot.id}`}>
+                    {/* Animated warning ring */}
+                    <circle
+                        cx={robot.x}
+                        cy={robot.y}
+                        r="16"
+                        fill="none"
+                        stroke="#ef4444"
+                        strokeWidth="1.5"
+                        strokeOpacity="0.75"
+                        strokeDasharray="3 3"
+                        style={{ animation: 'orcaPulse 1s ease-in-out infinite' }}
+                    />
+                    {/* ORCA badge */}
+                    <rect
+                        x={robot.x - 14}
+                        y={robot.y - 28}
+                        width="28"
+                        height="11"
+                        rx="3"
+                        fill="#ef4444"
+                        fillOpacity="0.92"
+                    />
+                    <text
+                        x={robot.x}
+                        y={robot.y - 20}
+                        fill="white"
+                        fontSize="7"
+                        fontWeight="800"
+                        textAnchor="middle"
+                        fontFamily="IBM Plex Sans, sans-serif"
+                    >
+                        ORCA
+                    </text>
+                </g>
+            ))}
         </g>
-      ))}
-    </g>
-  );
+    );
 }
 
 // ─── PibtBlockageLayer ───────────────────────────────────────────────────────
 /** Shows PIBT yield/wait badges and a stop bar on blocked robots */
 function PibtBlockageLayer({ robots, pibtStatus, visible }) {
-  if (!visible) return null;
-  return (
-    <g id="pibt-layer">
-      {robots.filter((r) => pibtStatus[r.id]?.waiting).map((robot) => {
-        const status = pibtStatus[robot.id];
-        return (
-          <g key={`pibt-${robot.id}`}>
-            {/* Stop octagon ring */}
-            <circle
-              cx={robot.x}
-              cy={robot.y}
-              r="14"
-              fill="#f59e0b"
-              fillOpacity="0.15"
-              stroke="#f59e0b"
-              strokeWidth="2"
-              strokeDasharray="4 2"
-              style={{ animation: 'pibtBlink 1.2s step-start infinite' }}
-            />
-            {/* PIBT badge */}
-            <rect
-              x={robot.x - 18}
-              y={robot.y - 30}
-              width="36"
-              height="12"
-              rx="3"
-              fill="#92400e"
-              fillOpacity="0.92"
-            />
-            <text
-              x={robot.x}
-              y={robot.y - 21}
-              fill="white"
-              fontSize="7"
-              fontWeight="800"
-              textAnchor="middle"
-              fontFamily="IBM Plex Sans, sans-serif"
-            >
-              PIBT WAIT
-            </text>
-            {/* Segment label if known */}
-            {status.segment_id && (
-              <text
-                x={robot.x}
-                y={robot.y - 11}
-                fill="#92400e"
-                fontSize="6.5"
-                fontWeight="600"
-                textAnchor="middle"
-                fontFamily="IBM Plex Sans, sans-serif"
-                style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
-              >
-                {status.segment_id}
-              </text>
-            )}
-          </g>
-        );
-      })}
-    </g>
-  );
+    if (!visible) return null;
+    return (
+        <g id="pibt-layer">
+            {robots.filter((r) => pibtStatus[r.id]?.waiting).map((robot) => {
+                const status = pibtStatus[robot.id];
+                return (
+                    <g key={`pibt-${robot.id}`}>
+                        {/* Stop octagon ring */}
+                        <circle
+                            cx={robot.x}
+                            cy={robot.y}
+                            r="14"
+                            fill="#f59e0b"
+                            fillOpacity="0.15"
+                            stroke="#f59e0b"
+                            strokeWidth="2"
+                            strokeDasharray="4 2"
+                            style={{ animation: 'pibtBlink 1.2s step-start infinite' }}
+                        />
+                        {/* PIBT badge */}
+                        <rect
+                            x={robot.x - 18}
+                            y={robot.y - 30}
+                            width="36"
+                            height="12"
+                            rx="3"
+                            fill="#92400e"
+                            fillOpacity="0.92"
+                        />
+                        <text
+                            x={robot.x}
+                            y={robot.y - 21}
+                            fill="white"
+                            fontSize="7"
+                            fontWeight="800"
+                            textAnchor="middle"
+                            fontFamily="IBM Plex Sans, sans-serif"
+                        >
+                            PIBT WAIT
+                        </text>
+                        {/* Segment label if known */}
+                        {status.segment_id && (
+                            <text
+                                x={robot.x}
+                                y={robot.y - 11}
+                                fill="#92400e"
+                                fontSize="6.5"
+                                fontWeight="600"
+                                textAnchor="middle"
+                                fontFamily="IBM Plex Sans, sans-serif"
+                                style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
+                            >
+                                {status.segment_id}
+                            </text>
+                        )}
+                    </g>
+                );
+            })}
+        </g>
+    );
 }
 
 // ─── AlgorithmLegend ─────────────────────────────────────────────────────────
 /** Toggle-able legend panel for the map overlays */
 function AlgorithmLegend({ showNavPath, showOrca, showPibt, onToggle }) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="absolute bottom-16 left-4 z-[6]">
-      <div className="rounded-[9px] border border-[#e3e6e1] bg-white/96 shadow-[0_2px_10px_rgba(27,35,31,0.1)] backdrop-blur-sm overflow-hidden">
-        <button
-          className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] font-bold text-[#1b231f] hover:bg-[#f7f8f6] transition-colors"
-          onClick={() => setOpen((o) => !o)}
-          title="Toggle algorithm overlay legend"
-        >
-          <span className="flex items-center gap-1.5">
-            <span>🧠</span>
-            <span>Algo Overlays</span>
-          </span>
-          <span className="text-[#8e988f]">{open ? '▾' : '▸'}</span>
-        </button>
-        {open && (
-          <div className="border-t border-[#eceee9] px-3 py-2 space-y-1.5">
-            {[
-              { key: 'navPath', label: 'Nav2 Planned Route', color: '#3978b7', icon: '─ ─', active: showNavPath },
-              { key: 'orca',    label: 'ORCA Avoidance',     color: '#ef4444', icon: '◎',   active: showOrca },
-              { key: 'pibt',    label: 'PIBT Yield Wait',    color: '#f59e0b', icon: '⏸',   active: showPibt },
-            ].map(({ key, label, color, icon, active }) => (
-              <button
-                key={key}
-                onClick={() => onToggle(key)}
-                className="flex w-full items-center gap-2 rounded-[5px] px-1.5 py-1 text-left text-[10.5px] font-medium transition-colors hover:bg-[#f7f8f6]"
-                style={{ opacity: active ? 1 : 0.45 }}
-              >
-                <span className="flex h-4 w-4 items-center justify-center rounded text-[11px]" style={{ color }}>{icon}</span>
-                <span className="flex-1 text-[#374151]">{label}</span>
-                <span
-                  className="h-3 w-3 rounded border"
-                  style={{ background: active ? color : 'transparent', borderColor: color, opacity: 0.85 }}
-                />
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
+    const [open, setOpen] = useState(true);
+    return (
+        <div className="absolute bottom-16 left-4 z-[6]">
+            <div className="rounded-[9px] border border-[#e3e6e1] bg-white/96 shadow-[0_2px_10px_rgba(27,35,31,0.1)] backdrop-blur-sm overflow-hidden">
+                <button
+                    className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] font-bold text-[#1b231f] hover:bg-[#f7f8f6] transition-colors"
+                    onClick={() => setOpen((o) => !o)}
+                    title="Toggle algorithm overlay legend"
+                >
+                    <span className="flex items-center gap-1.5">
+                        <span>🧠</span>
+                        <span>Algo Overlays</span>
+                    </span>
+                    <span className="text-[#8e988f]">{open ? '▾' : '▸'}</span>
+                </button>
+                {open && (
+                    <div className="border-t border-[#eceee9] px-3 py-2 space-y-1.5">
+                        {[
+                            { key: 'navPath', label: 'Nav2 Planned Route', color: '#3978b7', icon: '─ ─', active: showNavPath },
+                            { key: 'orca', label: 'ORCA Avoidance', color: '#ef4444', icon: '◎', active: showOrca },
+                            { key: 'pibt', label: 'PIBT Yield Wait', color: '#f59e0b', icon: '⏸', active: showPibt },
+                        ].map(({ key, label, color, icon, active }) => (
+                            <button
+                                key={key}
+                                onClick={() => onToggle(key)}
+                                className="flex w-full items-center gap-2 rounded-[5px] px-1.5 py-1 text-left text-[10.5px] font-medium transition-colors hover:bg-[#f7f8f6]"
+                                style={{ opacity: active ? 1 : 0.45 }}
+                            >
+                                <span className="flex h-4 w-4 items-center justify-center rounded text-[11px]" style={{ color }}>{icon}</span>
+                                <span className="flex-1 text-[#374151]">{label}</span>
+                                <span
+                                    className="h-3 w-3 rounded border"
+                                    style={{ background: active ? color : 'transparent', borderColor: color, opacity: 0.85 }}
+                                />
+                            </button>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
 
 // ─── TrafficEventToast (Map-overlay live feed) ───────────────────────────────
 /** Shows the last 4 live ORCA/PIBT/reservation events as a compact ticker on the map */
 function TrafficEventToast({ trafficEvents }) {
-  const recent = trafficEvents.slice(-4).reverse();
-  if (recent.length === 0) return null;
+    const recent = trafficEvents.slice(-4).reverse();
+    if (recent.length === 0) return null;
 
-  const icon = (ev) => {
-    if (ev.event === 'orca_avoidance')     return { emoji: '↔', color: '#ef4444' };
-    if (ev.event === 'pibt_wait')          return { emoji: '⏸', color: '#f59e0b' };
-    if (ev.event === 'reservation_granted') return { emoji: '✓', color: '#2f6f5e' };
-    if (ev.event === 'reservation_released') return { emoji: '↑', color: '#3978b7' };
-    if (ev.event === 'reservation_requested') return { emoji: '?', color: '#6366f1' };
-    if (ev.event === 'reservation_expired') return { emoji: '⚠', color: '#c0453b' };
-    return { emoji: '●', color: '#6b776f' };
-  };
-
-  const label = (ev) => {
-    const seg = ev.segment_id ? ` · ${ev.segment_id}` : '';
-    const labels = {
-      orca_avoidance: `ORCA active${seg}`,
-      pibt_wait: `PIBT yield${seg}`,
-      reservation_granted: `Aisle granted${seg}`,
-      reservation_released: `Aisle free${seg}`,
-      reservation_requested: `Aisle request${seg}`,
-      reservation_expired: `Lease expired${seg}`,
+    const icon = (ev) => {
+        if (ev.event === 'orca_avoidance') return { emoji: '↔', color: '#ef4444' };
+        if (ev.event === 'pibt_wait') return { emoji: '⏸', color: '#f59e0b' };
+        if (ev.event === 'reservation_granted') return { emoji: '✓', color: '#2f6f5e' };
+        if (ev.event === 'reservation_released') return { emoji: '↑', color: '#3978b7' };
+        if (ev.event === 'reservation_requested') return { emoji: '?', color: '#6366f1' };
+        if (ev.event === 'reservation_expired') return { emoji: '⚠', color: '#c0453b' };
+        return { emoji: '●', color: '#6b776f' };
     };
-    return labels[ev.event] || ev.event?.replaceAll('_', ' ');
-  };
 
-  return (
-    <div className="absolute left-4 bottom-4 z-[7] flex flex-col gap-1 pointer-events-none">
-      {recent.map((ev, i) => {
-        const { emoji, color } = icon(ev);
-        return (
-          <div
-            key={`toast-${i}-${ev.timestamp_utc}`}
-            className="flex items-center gap-2 rounded-[7px] border border-[#e3e6e1] bg-white/96 px-2.5 py-1 text-[10.5px] shadow-sm backdrop-blur-sm"
-            style={{ opacity: 1 - i * 0.22 }}
-          >
-            <span className="text-[12px] font-bold" style={{ color }}>{emoji}</span>
-            <span className="font-semibold" style={{ color }}>{ev.robot_id || 'fleet'}</span>
-            <span className="text-[#4a554e]">{label(ev)}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
+    const label = (ev) => {
+        const seg = ev.segment_id ? ` · ${ev.segment_id}` : '';
+        const labels = {
+            orca_avoidance: `ORCA active${seg}`,
+            pibt_wait: `PIBT yield${seg}`,
+            reservation_granted: `Aisle granted${seg}`,
+            reservation_released: `Aisle free${seg}`,
+            reservation_requested: `Aisle request${seg}`,
+            reservation_expired: `Lease expired${seg}`,
+        };
+        return labels[ev.event] || ev.event?.replaceAll('_', ' ');
+    };
+
+    return (
+        <div className="absolute left-4 bottom-4 z-[7] flex flex-col gap-1 pointer-events-none">
+            {recent.map((ev, i) => {
+                const { emoji, color } = icon(ev);
+                return (
+                    <div
+                        key={`toast-${i}-${ev.timestamp_utc}`}
+                        className="flex items-center gap-2 rounded-[7px] border border-[#e3e6e1] bg-white/96 px-2.5 py-1 text-[10.5px] shadow-sm backdrop-blur-sm"
+                        style={{ opacity: 1 - i * 0.22 }}
+                    >
+                        <span className="text-[12px] font-bold" style={{ color }}>{emoji}</span>
+                        <span className="font-semibold" style={{ color }}>{ev.robot_id || 'fleet'}</span>
+                        <span className="text-[#4a554e]">{label(ev)}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
 }
 
 
@@ -518,6 +518,7 @@ function MapPanel({
     pibtStatus = {},
     // Dock station layer
     dockStations = {},
+    onSaveBroadcaster = () => false,
 }) {
     const svgRef = useRef(null);
     const instructionRef = useRef(null);
@@ -530,15 +531,45 @@ function MapPanel({
     const [pixelsPerMeter, setPixelsPerMeter] = useState(20);
     // Overlay visibility toggles
     const [showNavPath, setShowNavPath] = useState(true);
-    const [showOrca,    setShowOrca]    = useState(true);
-    const [showPibt,    setShowPibt]    = useState(true);
+    const [showOrca, setShowOrca] = useState(true);
+    const [showPibt, setShowPibt] = useState(true);
+    const [broadcasterX, setBroadcasterX] = useState("");
+    const [broadcasterY, setBroadcasterY] = useState("");
+    const [broadcasterError, setBroadcasterError] = useState("");
     const zoom = Math.round((baseViewBox.w / viewBox.w) * 100);
     const currentTaskNum = stagedTasks.length + 1;
 
+    useEffect(() => {
+        if (!dockInfo) return;
+        setBroadcasterX(String(dockInfo.rosX ?? ""));
+        setBroadcasterY(String(dockInfo.rosY ?? ""));
+    }, [dockInfo?.rosX, dockInfo?.rosY]);
+
+    function handleBroadcasterSave(event) {
+        event.preventDefault();
+        const x = Number(broadcasterX);
+        const y = Number(broadcasterY);
+        const maxX = MAP_CONFIG.originX + MAP_CONFIG.width * MAP_CONFIG.resolution;
+        const maxY = MAP_CONFIG.originY + MAP_CONFIG.height * MAP_CONFIG.resolution;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+            setBroadcasterError("Enter valid X and Y coordinates.");
+            return;
+        }
+        if (x < MAP_CONFIG.originX || x > maxX || y < MAP_CONFIG.originY || y > maxY) {
+            setBroadcasterError("Position must be inside the active map.");
+            return;
+        }
+        if (!onSaveBroadcaster(x, y)) {
+            setBroadcasterError("ROS is offline; the broadcaster was not moved.");
+            return;
+        }
+        setBroadcasterError("");
+    }
+
     function handleOverlayToggle(key) {
         if (key === 'navPath') setShowNavPath((v) => !v);
-        if (key === 'orca')    setShowOrca((v) => !v);
-        if (key === 'pibt')    setShowPibt((v) => !v);
+        if (key === 'orca') setShowOrca((v) => !v);
+        if (key === 'pibt') setShowPibt((v) => !v);
     }
 
     useEffect(() => {
@@ -546,7 +577,7 @@ function MapPanel({
             const rect = svgRef.current?.getBoundingClientRect();
             if (!rect || !rect.width || !rect.height) return;
             const pixelsPerMapUnit = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
-            const ppm = pixelsPerMapUnit * 20;
+            const ppm = pixelsPerMapUnit / MAP_CONFIG.resolution;
             setPixelsPerMeter(ppm);
             onZoomChange?.({
                 zoom,
@@ -702,13 +733,13 @@ function MapPanel({
                 onPointerUp={() => setDrag(null)}
                 onClick={handleMapClick}
             >
-                {/* 1:1 Pixel-perfect logistics warehouse map (485 × 484 px = 24.25 × 24.2 m @ 0.05m/px) */}
+                {/* Render at the OccupancyGrid's native pixel dimensions. */}
                 <image
                     href={warehouseMap}
                     x="0"
                     y="0"
-                    width="485"
-                    height="484"
+                    width={MAP_CONFIG.width}
+                    height={MAP_CONFIG.height}
                     preserveAspectRatio="xMidYMid meet"
                     opacity="1"
                 />
@@ -1040,11 +1071,11 @@ function MapPanel({
                         <g key={robot.id}>
                             {robot.online && (
                                 <>
-                                    {/* Simulated 6m P2P communication radius (6m / 0.05m = 120px) */}
+                                    {/* Simulated 6m P2P communication radius. */}
                                     <circle
                                         cx={robot.x}
                                         cy={robot.y}
-                                        r="120"
+                                        r={6 / MAP_CONFIG.resolution}
                                         fill={robot.colorDim}
                                         fillOpacity=".18"
                                         stroke={robot.color}
@@ -1056,7 +1087,7 @@ function MapPanel({
                                         className="origin-center animate-[pulse_3s_ease-out_infinite]"
                                         cx={robot.x}
                                         cy={robot.y}
-                                        r="120"
+                                        r={6 / MAP_CONFIG.resolution}
                                         fill="none"
                                         stroke={robot.color}
                                         strokeDasharray="3 4"
@@ -1118,16 +1149,28 @@ function MapPanel({
 
             {/* Broadcaster RF Status Tag */}
             {dockInfo && (
-                <div className="absolute left-4 top-4 z-[6] flex items-center gap-2 rounded-[8px] border border-[#f59e0b]/40 bg-white/95 px-3 py-1.5 text-[11.5px] font-semibold text-[#92400e] shadow-sm backdrop-blur-sm">
-                    <span className="relative flex h-2.5 w-2.5">
-                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#f59e0b] opacity-75"></span>
-                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#d97706]"></span>
-                    </span>
-                    <span>Broadcaster: ({dockInfo.rosX?.toFixed(1)}, {dockInfo.rosY?.toFixed(1)})</span>
-                    <span className="rounded bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold text-[#b45309] border border-[#fcd34d]">
-                        {dockInfo.radiusMeters}m RF Range
-                    </span>
-                </div>
+                <form onSubmit={handleBroadcasterSave} className="absolute left-4 top-4 z-[6] rounded-[8px] border border-[#f59e0b]/40 bg-white/95 px-3 py-2 text-[#92400e] shadow-sm backdrop-blur-sm">
+                    <div className="flex items-center gap-2 text-[11.5px] font-semibold">
+                        <span className="relative flex h-2.5 w-2.5">
+                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#f59e0b] opacity-75"></span>
+                            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#d97706]"></span>
+                        </span>
+                        <span>Task broadcaster</span>
+                        <span className="rounded border border-[#fcd34d] bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold text-[#b45309]">
+                            {dockInfo.radiusMeters}m RF
+                        </span>
+                    </div>
+                    <div className="mt-1.5 flex items-end gap-1.5">
+                        <label className="text-[10px] font-semibold">X
+                            <input aria-label="Broadcaster X coordinate" value={broadcasterX} onChange={(event) => setBroadcasterX(event.target.value)} type="number" step="0.001" className="ml-1 w-16 rounded border border-[#fcd34d] bg-white px-1.5 py-1 text-[11px] text-[#1b231f] outline-none focus:border-[#d97706]" />
+                        </label>
+                        <label className="text-[10px] font-semibold">Y
+                            <input aria-label="Broadcaster Y coordinate" value={broadcasterY} onChange={(event) => setBroadcasterY(event.target.value)} type="number" step="0.001" className="ml-1 w-16 rounded border border-[#fcd34d] bg-white px-1.5 py-1 text-[11px] text-[#1b231f] outline-none focus:border-[#d97706]" />
+                        </label>
+                        <button type="submit" className="rounded bg-[#d97706] px-2 py-1 text-[10px] font-bold text-white hover:bg-[#b45309]">Apply</button>
+                    </div>
+                    {broadcasterError && <div className="mt-1 text-[9.5px] font-medium text-[#c0453b]">{broadcasterError}</div>}
+                </form>
             )}
 
             {/* Top-Right Quick Aisle Controls */}
@@ -1345,11 +1388,10 @@ function TaskStatusPanel({
                     <button
                         id="task-view-global"
                         onClick={() => setViewMode('global')}
-                        className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
-                            viewMode === 'global'
-                                ? 'bg-[#2f6f5e] text-white'
-                                : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
-                        }`}
+                        className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${viewMode === 'global'
+                            ? 'bg-[#2f6f5e] text-white'
+                            : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
+                            }`}
                     >
                         Global
                     </button>
@@ -1358,11 +1400,10 @@ function TaskStatusPanel({
                             key={rid}
                             id={`task-view-${rid}`}
                             onClick={() => setViewMode(rid)}
-                            className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${
-                                viewMode === rid
-                                    ? 'bg-[#3978b7] text-white'
-                                    : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
-                            }`}
+                            className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${viewMode === rid
+                                ? 'bg-[#3978b7] text-white'
+                                : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
+                                }`}
                         >
                             {rid}
                         </button>
@@ -1375,8 +1416,8 @@ function TaskStatusPanel({
                 {viewMode !== 'global' && (
                     <div className="mb-2 flex items-center gap-1.5 rounded-[7px] border border-[#3978b7]/25 bg-[#eaf2fb] px-2.5 py-1.5 text-[10.5px] text-[#2d618f]">
                         <svg viewBox="0 0 24 24" className="h-3 w-3 flex-none" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8"/>
-                            <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8" />
+                            <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
                         </svg>
                         <span>Showing <b>{viewMode}</b>'s tasks from global CRDT view</span>
                     </div>
@@ -2109,8 +2150,8 @@ function AisleManagerDrawer({
                                     key={segId}
                                     onClick={() => onSelectAisle(aisle)}
                                     className={`cursor-pointer rounded-xl border p-3.5 transition-all shadow-xs ${isSelected
-                                            ? "border-[#6366f1] bg-[#f5f7ff] ring-1 ring-[#6366f1]"
-                                            : "border-[#e3e6e1] bg-white hover:border-[#cbd5e1] hover:bg-[#fbfcfb]"
+                                        ? "border-[#6366f1] bg-[#f5f7ff] ring-1 ring-[#6366f1]"
+                                        : "border-[#e3e6e1] bg-white hover:border-[#cbd5e1] hover:bg-[#fbfcfb]"
                                         }`}
                                 >
                                     <div className="flex items-center justify-between pb-2 border-b border-[#eceee9]">
@@ -2214,6 +2255,7 @@ function App() {
         dockInfo,
         broadcastTasks,
         saveAislesConfig,
+        saveBroadcasterConfig,
     } = useRos();
 
     // Derived algorithm overlay state (ORCA / PIBT active robots)
@@ -2558,6 +2600,7 @@ function App() {
                         orcaActive={orcaActive}
                         pibtStatus={pibtStatus}
                         dockStations={dockStations}
+                        onSaveBroadcaster={saveBroadcasterConfig}
                     />
                     <TaskStatusPanel
                         tasks={tasks}

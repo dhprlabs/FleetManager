@@ -1,7 +1,7 @@
 image: logistics_warehouse.pgm
 mode: trinary
-resolution: 0.0795
-origin: [-12.7265, -12.8940, 0.0]
+resolution: 0.050
+origin: [-15.3, -8.65, 0]
 negate: 0
 occupied_thresh: 0.65
-free_thresh: 0.25
+free_thresh: 0.196

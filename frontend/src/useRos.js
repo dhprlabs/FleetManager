@@ -23,13 +23,13 @@ const WS_URL = import.meta.env.VITE_ROSBRIDGE_URL || 'ws://localhost:9090';
 // ── Coordinate mapping ──────────────────────────────────────────────────────
 // Maps ROS map-frame metres ↔ SVG pixel space for logistics_warehouse.
 // Parameters match src/virtual_lab/maps/logistics_warehouse.yaml & /map topic:
-//   origin: [-5.807, -7.229, 0], resolution: 0.050, size: 485 × 484
+//   origin: [-12.7265, -12.8940, 0], resolution: 0.0795, size: 327 × 332
 export const MAP_CONFIG = {
-  originX: -5.807,      // ROS map origin x (metres)
-  originY: -7.229,      // ROS map origin y (metres)
-  resolution: 0.05,     // metres per pixel
-  width: 485,           // image width px
-  height: 484,          // image height px
+  originX: -12.7265,    // ROS map origin x (metres)
+  originY: -12.8940,    // ROS map origin y (metres)
+  resolution: 0.0795,   // metres per pixel
+  width: 327,            // image width px
+  height: 332,           // image height px
 };
 
 export function rosToSvg(rx, ry) {
@@ -206,18 +206,18 @@ function getBridge() {
 
 // ── Default Robot Spawn / Dock Positions ───────────────────────────────────
 export const DEFAULT_SPAWN_POSES = {
-  robot1:  { x: 7.7, y: 14.4 },
-  robot2:  { x: 3.4, y: 14.6 },
-  robot3:  { x: 4.3, y: 1.2 },
-  robot_1: { x: 7.7, y: 14.4 },
-  robot_2: { x: 3.4, y: 14.6 },
-  robot_3: { x: 4.3, y: 1.2 },
+  robot1:  { x: 12.0245, y: 4.6012 },
+  robot2:  { x: 12.0245, y: -3.3217 },
+  robot3:  { x: -2.5056, y: -0.3991 },
+  robot_1: { x: 12.0245, y: 4.6012 },
+  robot_2: { x: 12.0245, y: -3.3217 },
+  robot_3: { x: -2.5056, y: -0.3991 },
 };
 
 // ── Default Broadcaster / Dock Station Configuration ───────────────────────
 export const DEFAULT_DOCK_CONFIG = {
-  rosX: 5.0,
-  rosY: 12.0,
+  rosX: 9.53,
+  rosY: -1.526,
   radiusMeters: 6.0,
 };
 
@@ -584,6 +584,30 @@ export function useRos() {
     return true;
   }, []);
 
+  // ── Move the task broadcaster / radio source at runtime ─────────────────
+  const saveBroadcasterConfig = useCallback((rosX, rosY) => {
+    const x = Number(rosX);
+    const y = Number(rosY);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return false;
+
+    const bridge = getBridge();
+    if (!bridge.connected) return false;
+
+    bridge.publish('/fleet/dock_config', 'std_msgs/msg/String', {
+      data: JSON.stringify({ x, y, source: 'frontend_ui', timestamp: Date.now() / 1000 }),
+    });
+    const svgPos = rosToSvg(x, y);
+    setDockInfo((previous) => ({
+      ...previous,
+      rosX: x,
+      rosY: y,
+      x: svgPos.x,
+      y: svgPos.y,
+      radiusPx: Math.round((previous?.radiusMeters ?? DEFAULT_DOCK_CONFIG.radiusMeters) / MAP_CONFIG.resolution),
+    }));
+    return true;
+  }, []);
+
   return {
     rosStatus,
     liveRobots,
@@ -598,6 +622,7 @@ export function useRos() {
     dockInfo,
     broadcastTasks,
     saveAislesConfig,
+    saveBroadcasterConfig,
   };
 }
 

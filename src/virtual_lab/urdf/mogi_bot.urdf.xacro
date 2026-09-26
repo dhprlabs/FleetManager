@@ -412,6 +412,55 @@
 
   </link>
 
+  <material name="cardboard_brown">
+    <color rgba="0.76 0.60 0.42 1.0"/>
+  </material>
+
+  <!-- ========================================================= -->
+  <!-- LIDAR REAR TOP BOX -->
+  <!-- ========================================================= -->
+
+  <joint
+    name="${robot_name}/lidar_rear_box_joint"
+    type="fixed">
+
+    <origin xyz="-0.12 0 0.14" rpy="0 0 0"/>
+
+    <parent link="${robot_name}/base_link"/>
+
+    <child link="${robot_name}/lidar_rear_box"/>
+
+  </joint>
+
+
+  <link name="${robot_name}/lidar_rear_box">
+
+    <collision name="collision">
+
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+
+      <geometry>
+
+        <box size="0.14 0.05 0.02"/>
+
+      </geometry>
+
+    </collision>
+
+    <visual name="visual">
+
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <material name="cardboard_brown"/>
+      <geometry>
+
+        <box size="0.14 0.18 0.14"/>
+
+      </geometry>
+
+    </visual>
+
+  </link>
+
 
   <!-- ========================================================= -->
   <!-- LIDAR GAZEBO SETTINGS -->

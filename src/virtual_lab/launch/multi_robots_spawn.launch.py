@@ -109,9 +109,9 @@ def generate_launch_description():
             '-name', 'robot1',
             '-string', robot1_description,
 
-            '-x', '-10.7947',
-            '-y', '0.5379',
-            '-z', '0.1996',
+            '-x', '12.0245',
+            '-y', '4.6012',
+            '-z', '0.255126',
             '-Y', '0.0'
         ],
 
@@ -163,9 +163,9 @@ def generate_launch_description():
             '-name', 'robot2',
             '-string', robot2_description,
 
-            '-x', '-9.3141',
-            '-y', '-3.3217',
-            '-z', '0.2026',
+            '-x', '12.0245',
+            '-y', '-3.321700',
+            '-z', '0.255126',
             '-Y', '0.0'
         ],
 
@@ -217,9 +217,9 @@ def generate_launch_description():
             '-name', 'robot3',
             '-string', robot3_description,
 
-            '-x', '3.9202',
-            '-y', '-1.6023',
-            '-z', '0.2013',
+            '-x', '-2.5056',
+            '-y', '-0.3991',
+            '-z', '0.255125',
             '-Y', '0.0'
         ],
 

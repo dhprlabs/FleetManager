@@ -24,6 +24,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
+from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 from fleet_interfaces.msg import (
@@ -52,8 +53,8 @@ class StateManager(Node):
         self.declare_parameter('beacon_rate', 1.0)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
-        self.declare_parameter('broadcaster_x', 5.0)
-        self.declare_parameter('broadcaster_y', 12.0)
+        self.declare_parameter('broadcaster_x', 9.53)
+        self.declare_parameter('broadcaster_y', -1.526)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -129,6 +130,7 @@ class StateManager(Node):
         self.create_subscription(TaskPool, '/fleet/task_pool', self._task_pool_cb, latching_qos)
         self.create_subscription(Task, '/fleet/task_events', self._task_event_cb, 10)
         self.create_subscription(Task, 'task_events', self._local_task_event_cb, 10)
+        self.create_subscription(String, '/fleet/dock_config', self._handle_dock_config, 10)
 
         # P2P event subscription for reconnect handling
         self.create_subscription(P2PEvent, 'p2p_events', self._p2p_event_cb, 10)
@@ -235,6 +237,18 @@ class StateManager(Node):
     # ──────────────────────────────────────────────────────────────────────────
     # Task Pool Seeding
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _handle_dock_config(self, msg: String):
+        """Update the task-broadcaster position used for radio-range checks."""
+        try:
+            config = json.loads(msg.data)
+            x, y = float(config['x']), float(config['y'])
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise ValueError('coordinates must be finite')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'Ignoring invalid dock configuration: {exc}')
+            return
+        self.broadcaster_x, self.broadcaster_y = x, y
 
     def _task_pool_cb(self, msg: TaskPool):
         own = self.fs.get_own_state()

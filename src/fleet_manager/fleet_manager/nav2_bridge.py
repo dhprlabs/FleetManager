@@ -88,8 +88,8 @@ class TaskExecutionManager(Node):
         self.declare_parameter('enable_pickup_validation', True)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
-        self.declare_parameter('broadcaster_x', 5.0)
-        self.declare_parameter('broadcaster_y', 12.0)
+        self.declare_parameter('broadcaster_x', 9.53)
+        self.declare_parameter('broadcaster_y', -1.526)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -217,6 +217,9 @@ class TaskExecutionManager(Node):
         )
         self.task_events_sub = self.create_subscription(
             Task, '/fleet/task_events', self._handle_task_event, 10
+        )
+        self.dock_config_sub = self.create_subscription(
+            String, '/fleet/dock_config', self._handle_dock_config, 10
         )
         # ReservationManager publishes the aisle map once, latched. A volatile
         # subscription would never receive it, so match the resolver's QoS.
@@ -939,7 +942,7 @@ class TaskExecutionManager(Node):
                 return
 
             # ── Blocking events ───────────────────────────────────────────────
-            _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance')
+            _BLOCKING_EVENTS = ('pibt_wait', 'orca_avoidance', 'apf_avoidance')
             if event in _BLOCKING_EVENTS:
                 seg_id = payload.get('segment_id')
                 if event == 'pibt_wait' and seg_id:
@@ -955,7 +958,7 @@ class TaskExecutionManager(Node):
                         self._waiting_for_aisle = seg_id
                     else:
                         self._waiting_for_aisle = None
-                elif event == 'orca_avoidance':
+                elif event in ('orca_avoidance', 'apf_avoidance'):
                     self._waiting_for_aisle = None
 
                 if not self._paused_for_traffic and self.current_goal_handle is not None:
@@ -1367,6 +1370,18 @@ class TaskExecutionManager(Node):
             'source_robot_id': self.robot_id,
             'timestamp': self.get_clock().now().nanoseconds,
         })
+
+    def _handle_dock_config(self, msg: String):
+        """Update the task-broadcaster position used for radio-range checks."""
+        try:
+            config = json.loads(msg.data)
+            x, y = float(config['x']), float(config['y'])
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise ValueError('coordinates must be finite')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'Ignoring invalid dock configuration: {exc}')
+            return
+        self.broadcaster_x, self.broadcaster_y = x, y
 
     def _eval_execution_step(self):
         """Periodic safety check, proximity arrival watchdog, and dock-return fallback.

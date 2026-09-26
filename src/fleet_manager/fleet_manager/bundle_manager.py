@@ -33,6 +33,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from std_msgs.msg import String
 from fleet_interfaces.msg import (
     Bundle,
     P2PMessage,
@@ -157,8 +158,8 @@ class BundleManager(Node):
         self.declare_parameter('service_time', 2.0)
         self.declare_parameter('dock_x', 5.0)
         self.declare_parameter('dock_y', 12.0)
-        self.declare_parameter('broadcaster_x', 5.0)
-        self.declare_parameter('broadcaster_y', 12.0)
+        self.declare_parameter('broadcaster_x', 9.53)
+        self.declare_parameter('broadcaster_y', -1.526)
         self.declare_parameter('communication_radius', 6.0)
         self.declare_parameter('initial_x', 0.0)
         self.declare_parameter('initial_y', 0.0)
@@ -215,6 +216,9 @@ class BundleManager(Node):
         self.task_pool_sub = self.create_subscription(
             TaskPool, '/fleet/task_pool', self._handle_task_pool, latching_qos
         )
+        self.dock_config_sub = self.create_subscription(
+            String, '/fleet/dock_config', self._handle_dock_config, 10
+        )
 
         # Publishers
         self.bundle_pub = self.create_publisher(Bundle, 'bundle', 10)
@@ -231,6 +235,18 @@ class BundleManager(Node):
     # ──────────────────────────────────────────────────────────────────────────
     # Inbound Event Handlers
     # ──────────────────────────────────────────────────────────────────────────
+
+    def _handle_dock_config(self, msg: String):
+        """Update the task-broadcaster position used for radio-range checks."""
+        try:
+            config = json.loads(msg.data)
+            x, y = float(config['x']), float(config['y'])
+            if not (math.isfinite(x) and math.isfinite(y)):
+                raise ValueError('coordinates must be finite')
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            self.get_logger().warn(f'Ignoring invalid dock configuration: {exc}')
+            return
+        self.broadcaster_x, self.broadcaster_y = x, y
 
     def _handle_robot_state(self, msg: RobotState):
         self.current_x = msg.current_pose.pose.position.x

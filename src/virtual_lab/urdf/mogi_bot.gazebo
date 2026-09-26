@@ -118,9 +118,9 @@
 
             <resolution>1</resolution>
 
-            <min_angle>-3.14</min_angle>
+            <min_angle>-1.57</min_angle>
 
-            <max_angle>3.14</max_angle>
+            <max_angle>1.57</max_angle>
 
           </horizontal>
 
@@ -128,7 +128,7 @@
 
         <range>
 
-          <min>0.3</min>
+          <min>0.05</min>
 
           <max>12</max>
 

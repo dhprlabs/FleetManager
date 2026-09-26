@@ -30,6 +30,7 @@ try:
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from geometry_msgs.msg import Twist, PoseStamped, Point
     from nav_msgs.msg import Path
+    from sensor_msgs.msg import LaserScan
     from std_msgs.msg import String
     from fleet_interfaces.msg import Intent, Reservation, RobotState
     _ROS_AVAILABLE = True
@@ -59,6 +60,14 @@ except ImportError:
         STATE_DENIED = 6
     class String:
         def __init__(self): self.data = ''
+    class LaserScan:
+        def __init__(self):
+            self.ranges = []
+            self.angle_min = -math.pi
+            self.angle_max = math.pi
+            self.angle_increment = math.radians(1.0)
+            self.range_min = 0.05
+            self.range_max = 10.0
 
 try:
     from fleet_manager.reservation_manager import DEFAULT_AISLE_SEGMENTS, ReservationManager
@@ -608,8 +617,8 @@ class ConflictCoordinator:
                     self.current_choke_segment = aisle_id
                     my_agent.record_waiting(dt)
                     override_vel = Vector2(0.0, 0.0)
-                    return override_vel, True, (f"[{self.robot_id}] Inside aisle '{aisle_id}' held by {holder} — "
-                                                f"STOP to avoid collision. PIBT wait active.")
+                    return override_vel, True, (f"[{self.robot_id}] Inside aisle '{aisle_id}' held by {holder} "
+                                                f"(Lease lost mid-traversal) — STOP to avoid collision. PIBT wait active.")
                 else:
                     # Inside aisle with no recorded holder: allow robot to proceed to exit the aisle cleanly
                     self.is_waiting_at_choke = False
@@ -642,13 +651,66 @@ class ConflictCoordinator:
                                             f"ORCA disabled. Velocity override: STOP.")
 
         # ─────────────────────────────────────────────────────────────────────
-        # Step 2: Open Space — Nav2 Local Planner (DWB + Costmap) handles dynamic avoidance
+        # Step 2: Open Space — Artificial Potential Field (APF) with Right-Hand Bias
         # ─────────────────────────────────────────────────────────────────────
-        # In open warehouse space, Nav2's local planner uses LiDAR (VoxelLayer) and
-        # DWB BaseObstacle critic to steer differential-drive robots around each other
-        # smoothly without artificial sideways velocity commands.
-        my_agent.reset_waiting()
-        return None, False, f"[{self.robot_id}] Open space clear of choke points. Nav2 DWB local planner active."
+        if nav2_pref_vel.length() <= 0.01:
+            my_agent.reset_waiting()
+            return None, False, f"[{self.robot_id}] Nav2 stationary. Avoidance inactive."
+
+        open_space_neighbors: List[Tuple[Vector2, Vector2]] = []
+        for p_id, (p_pos, p_vel) in peer_states.items():
+            if not self.is_in_single_lane_aisle(p_pos, margin=0.0):
+                open_space_neighbors.append((p_pos, p_vel))
+
+        if not open_space_neighbors:
+            my_agent.reset_waiting()
+            return None, False, f"[{self.robot_id}] Open space clear. Nav2 runs uninterrupted."
+
+        conflict_detected = False
+        repulsive_force = Vector2(0.0, 0.0)
+        d_safe = 2.5
+        min_peer_dist = float('inf')
+
+        for p_pos, p_vel in open_space_neighbors:
+            rel_pos = my_pos - p_pos
+            dist = rel_pos.length()
+            if dist < min_peer_dist:
+                min_peer_dist = dist
+            if 0.001 < dist < d_safe:
+                rel_vel = my_vel - p_vel
+                closing_speed = -rel_pos.dot(rel_vel) / dist if dist > 0.01 else 0.0
+                if closing_speed > 0.05 or dist < 1.8:
+                    conflict_detected = True
+                    rep_mag = 1.8 * (1.0 / dist - 1.0 / d_safe) / max(0.1, dist * dist)
+                    rep_dir = rel_pos.normalized()
+                    repulsive_force = repulsive_force + rep_dir * rep_mag
+
+                    # Right-hand rule bias (maritime rule): perpendicular to heading pointing right
+                    pref_len = nav2_pref_vel.length()
+                    if pref_len > 0.01:
+                        fwd = nav2_pref_vel.normalized()
+                        # Clockwise 90 deg rotation in 2D (x, y) -> (y, -x)
+                        right = Vector2(fwd.y, -fwd.x)
+                        bias_mag = 0.9 * (1.0 - min(1.0, dist / d_safe))
+                        repulsive_force = repulsive_force + right * bias_mag
+
+        if conflict_detected:
+            net_vel = nav2_pref_vel + repulsive_force
+            max_spd = max(0.5, nav2_pref_vel.length())
+            if net_vel.length() > max_spd:
+                safe_vel = net_vel.normalized() * max_spd
+            elif net_vel.length() < 0.1:
+                fwd = nav2_pref_vel.normalized() if nav2_pref_vel.length() > 0.01 else Vector2(1.0, 0.0)
+                safe_vel = Vector2(fwd.y, -fwd.x) * 0.25
+            else:
+                safe_vel = net_vel
+
+            log_msg = (f"[{self.robot_id}] Open-space conflict detected (peer dist {min_peer_dist:.2f}m)! "
+                       f"APF avoidance active. Adjusted vel: pref={nav2_pref_vel} -> safe={safe_vel}. Override ACTIVE.")
+            return safe_vel, True, log_msg
+        else:
+            my_agent.reset_waiting()
+            return None, False, f"[{self.robot_id}] Open space clear of conflicts. Nav2 runs uninterrupted."
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -755,8 +817,29 @@ class ConflictResolver(Node):
         self.local_override_pub = self.create_publisher(Twist, 'cmd_vel_override', 10)
 
         self.last_step_time = time.time()
-        self.timer = self.create_timer(0.1, self.conflict_check)
-        self.get_logger().info(f'[{self.robot_id}] Conflict Resolver initialized (PIBT + Aging + ORCA).')
+        # 20 Hz timer to match Nav2 controller server frequency (controller_frequency: 20.0)
+        self.timer = self.create_timer(0.05, self.conflict_check)
+        self.my_yaw: float = 0.0
+        self._latest_scan: Optional[LaserScan] = None
+        self._last_scan_time: float = 0.0
+        self._apf_active: bool = False
+        self._apf_trigger_start: Optional[float] = None
+
+        if _ROS_AVAILABLE:
+            sensor_qos = QoSProfile(
+                depth=5,
+                reliability=ReliabilityPolicy.BEST_EFFORT,
+                durability=DurabilityPolicy.VOLATILE,
+            )
+            self.scan_sub = self.create_subscription(
+                LaserScan, 'scan', self.handle_scan, sensor_qos
+            )
+
+        self.get_logger().info(f'[{self.robot_id}] Conflict Resolver initialized (PIBT + Aging + APF at 20Hz).')
+
+    def handle_scan(self, msg: LaserScan):
+        self._latest_scan = msg
+        self._last_scan_time = time.time()
 
     def handle_intent(self, msg: Intent):
         pass
@@ -812,6 +895,11 @@ class ConflictResolver(Node):
         if msg.robot_id == self.robot_id:
             self.my_pos = pos
             self.my_vel = vel
+            # Extract robot yaw from orientation quaternion
+            q = msg.current_pose.pose.orientation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            self.my_yaw = math.atan2(siny_cosp, cosy_cosp)
             if msg.status == RobotState.STATUS_IDLE and not msg.current_task_id:
                 self._nav_plan_waypoints.clear()
                 self._plan_received = False
@@ -1142,16 +1230,69 @@ class ConflictResolver(Node):
 
         selected_vel = override_vel if is_active and override_vel is not None else self.nav2_pref_vel
         twist_msg = Twist()
-        twist_msg.linear.x = float(selected_vel.x)
-        # Differential drive robots have zero lateral velocity
-        twist_msg.linear.y = 0.0
-        # Forward Nav2 angular velocity unless override requires a full stop (0.0)
-        twist_msg.angular.z = 0.0 if (is_active and override_vel is not None) else self.nav2_pref_angular_z
+
+        is_open_space_conflict = (is_active and 'Open-space' in log_msg)
+
+        if is_active and not is_open_space_conflict:
+            # Choke point / Aisle PIBT wait: full stop
+            twist_msg.linear.x = 0.0
+            twist_msg.linear.y = 0.0
+            twist_msg.angular.z = 0.0
+        elif is_open_space_conflict and override_vel is not None:
+            # Open-space APF avoidance: convert to differential-drive steering with LiDAR
+            lidar_repulsive = Vector2(0.0, 0.0)
+            lidar_hit_count = 0
+            min_lidar_r = float('inf')
+            if self._latest_scan and (now - self._last_scan_time < 0.5):
+                angle = self._latest_scan.angle_min
+                inc = self._latest_scan.angle_increment
+                r_min = self._latest_scan.range_min
+                for r in self._latest_scan.ranges:
+                    if not math.isinf(r) and not math.isnan(r) and r_min <= r <= 2.0:
+                        # Forward sector within +/- 60 degrees
+                        if abs(angle) <= math.radians(60):
+                            if r < min_lidar_r:
+                                min_lidar_r = r
+                            force_mag = 1.0 / max(0.1, r * r)
+                            lidar_repulsive.x -= force_mag * math.cos(angle)
+                            lidar_repulsive.y -= force_mag * math.sin(angle)
+                            lidar_hit_count += 1
+                    angle += inc
+                if lidar_hit_count > 0:
+                    lidar_repulsive.x /= lidar_hit_count
+                    lidar_repulsive.y /= lidar_hit_count
+
+            # Determine desired body heading
+            if lidar_hit_count > 0:
+                # Steer away from detected laser points, with right-hand bias (negative y in body frame)
+                des_body_heading = math.atan2(lidar_repulsive.y - 0.7, 0.5 + lidar_repulsive.x)
+            else:
+                # Fall back to world-frame override_vel translated to body frame
+                safe_heading = math.atan2(override_vel.y, override_vel.x)
+                des_body_heading = math.atan2(math.sin(safe_heading - self.my_yaw), math.cos(safe_heading - self.my_yaw))
+
+            # Differential drive commands
+            omega_z = max(-1.0, min(1.0, 1.8 * des_body_heading))
+            if min_lidar_r < 0.45:
+                # Very close obstacle: brake forward motion and rotate to clear
+                v_x = 0.0
+            else:
+                v_x = max(0.05, min(0.3, 0.3 * max(0.0, math.cos(des_body_heading))))
+
+            twist_msg.linear.x = float(v_x)
+            twist_msg.linear.y = 0.0
+            twist_msg.angular.z = float(omega_z)
+        else:
+            # Clear: pass through Nav2 command directly
+            twist_msg.linear.x = float(self.nav2_pref_vel.x)
+            twist_msg.linear.y = 0.0
+            twist_msg.angular.z = float(self.nav2_pref_angular_z)
+
         self.drive_pub.publish(twist_msg)
         if is_active and override_vel is not None:
             self.override_pub.publish(twist_msg)
             self.local_override_pub.publish(twist_msg)
-            event = 'orca_avoidance' if 'Open-space conflict' in log_msg else 'pibt_wait'
+            event = 'apf_avoidance' if is_open_space_conflict else 'pibt_wait'
             if event != self._last_traffic_state:
                 self.get_logger().info(log_msg)
                 self._publish_traffic_event(event, segment_id=approaching_aisle or '', detail=log_msg)

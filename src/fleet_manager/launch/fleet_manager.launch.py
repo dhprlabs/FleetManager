@@ -7,12 +7,12 @@ from launch_ros.actions import Node, PushRosNamespace
 
 # Default initial positions matching Gazebo multi-robot warehouse spawn
 DEFAULT_SPAWN_POSES = {
-    'robot1': (7.7, 14.4),
-    'robot2': (3.4, 14.6),
-    'robot3': (4.3, 1.2),
-    'robot_1': (7.7, 14.4),
-    'robot_2': (3.4, 14.6),
-    'robot_3': (4.3, 1.2),
+    'robot1': (12.0245, 4.6012),
+    'robot2': (12.0245, -3.3217),
+    'robot3': (-2.5056, -0.3991),
+    'robot_1': (12.0245, 4.6012),
+    'robot_2': (12.0245, -3.3217),
+    'robot_3': (-2.5056, -0.3991),
 }
 
 # Per-robot default dock/charging-station positions.
@@ -20,12 +20,12 @@ DEFAULT_SPAWN_POSES = {
 # (prevents the idle-return collision cluster at a single dock).
 # These can be overridden at runtime via the /fleet/dock_config topic.
 DEFAULT_DOCK_POSES = {
-    'robot1':  (7.7, 14.4),
-    'robot2':  (3.4, 14.6),
-    'robot3':  (4.3,  1.2),
-    'robot_1': (7.7, 14.4),
-    'robot_2': (3.4, 14.6),
-    'robot_3': (4.3,  1.2),
+    'robot1':  (12.0245, 4.6012),
+    'robot2':  (12.0245, -3.3217),
+    'robot3':  (-2.5056, -0.3991),
+    'robot_1': (12.0245, 4.6012),
+    'robot_2': (12.0245, -3.3217),
+    'robot_3': (-2.5056, -0.3991),
 }
 
 
@@ -257,12 +257,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'dock_x',
-            default_value='5.0',
+            default_value='9.53',
             description='X coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(
             'dock_y',
-            default_value='12.0',
+            default_value='-1.526',
             description='Y coordinate of dock station / task broadcaster'
         ),
         DeclareLaunchArgument(

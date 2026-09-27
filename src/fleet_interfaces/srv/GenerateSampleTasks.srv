@@ -1,0 +1,6 @@
+# Request to generate sample tasks (e.g. T1 to T5)
+int32 count
+---
+bool success
+string[] task_ids
+string message

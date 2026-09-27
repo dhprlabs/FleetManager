@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<robot name="virtual_lab" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:include filename="$(find virtual_lab)/urdf/slam_bot.gazebo" />
+
+  <!-- Base Footprint -->
+  <link name="base_footprint" />
+
+  <joint name="base_footprint_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="base_footprint" />
+    <child link="base_link" />
+  </joint>
+
+  <!-- Base Link -->
+  <link name="base_link">
+    <inertial>
+      <origin xyz="-0.0018591 -0.00023636 0.052118" rpy="0 0 0" />
+      <mass value="1.2391" />
+      <inertia ixx="0.0027737" ixy="9.0036E-06" ixz="4.9674E-05" iyy="0.0041453" iyz="-2.6591E-06" izz="0.0062191" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/base_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.79216 0.81961 0.93333 1" />
+      </material>
+    </visual>
+  <collision>
+  <origin xyz="-0.020 0 0.067"/>
+  <geometry>
+    <box size="0.205 0.170 0.105"/>
+  </geometry>
+</collision>
+  </link>
+
+  <!-- Front Left Wheel -->
+  <link name="fr_left_wheel_link">
+    <inertial>
+      <origin xyz="-6.4206E-10 -4.5067E-09 -0.011873" rpy="0 0 0" />
+      <mass value="0.021403" />
+      <inertia ixx="8.6271E-06" ixy="8.8086E-11" ixz="-1.5492E-14" iyy="8.6276E-06" iyz="2.931E-15" izz="1.4513E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/fr_left_wheel_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.29804 0.29804 0.29804 1" />
+      </material>
+    </visual>
+  <collision>
+  <origin xyz="0 0 -0.015" rpy="0 0 0"/>
+  <geometry>
+    <cylinder radius="0.0344"
+              length="0.030"/>
+  </geometry>
+</collision>
+  </link>
+
+  <joint name="fr_left_wheel_joint" type="continuous">
+    <origin xyz="0.065506 0.1053 0.017279" rpy="-1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="fr_left_wheel_link" />
+    <axis xyz="0 0 1" />
+    <limit effort="2.94" velocity="4.712" />
+    <dynamics damping="0.1" friction="0.1" />
+  </joint>
+
+  <!-- Front Right Wheel -->
+  <link name="fr_right_wheel_link">
+    <inertial>
+      <origin xyz="-1.0253E-09 -4.3688E-09 0.011873" rpy="0 0 0" />
+      <mass value="0.021403" />
+      <inertia ixx="8.6271E-06" ixy="8.8432E-11" ixz="-1.2635E-14" iyy="8.6276E-06" iyz="9.8909E-15" izz="1.4513E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/fr_right_wheel_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.29804 0.29804 0.29804 1" />
+      </material>
+    </visual>
+  <collision>
+  <origin xyz="0 0 -0.015" rpy="0 0 0"/>
+  <geometry>
+    <cylinder radius="0.0344"
+              length="0.030"/>
+  </geometry>
+</collision>
+  </link>
+
+  <joint name="fr_right_wheel_joint" type="continuous">
+    <origin xyz="0.065492 -0.1053 0.017276" rpy="-1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="fr_right_wheel_link" />
+    <axis xyz="0 0 1" />
+    <limit effort="2.94" velocity="4.712" />
+    <dynamics damping="0.1" friction="0.1" />
+  </joint>
+
+  <!-- Back Left Wheel -->
+  <link name="bk_left_wheel_link">
+    <inertial>
+      <origin xyz="1.0253E-09 -4.3688E-09 -0.011873" rpy="0 0 0" />
+      <mass value="0.021403" />
+      <inertia ixx="8.6271E-06" ixy="-8.8432E-11" ixz="-1.2635E-14" iyy="8.6276E-06" iyz="-9.8911E-15" izz="1.4513E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/bk_left_wheel_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.29804 0.29804 0.29804 1" />
+      </material>
+    </visual>
+  <collision>
+  <origin xyz="0 0 0.015" rpy="0 0 0"/>
+  <geometry>
+    <cylinder radius="0.0344"
+              length="0.030"/>
+  </geometry>
+</collision>
+  </link>
+
+  <joint name="bk_left_wheel_joint" type="continuous">
+    <origin xyz="-0.065591 0.1053 0.017276" rpy="-1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="bk_left_wheel_link" />
+    <axis xyz="0 0 1" />
+    <limit effort="2.94" velocity="4.712" />
+    <dynamics damping="0.1" friction="0.1" />
+  </joint>
+
+  <!-- Back Right Wheel -->
+  <link name="bk_right_wheel_link">
+    <inertial>
+      <origin xyz="6.4206E-10 -4.5067E-09 0.011873" rpy="0 0 0" />
+      <mass value="0.021403" />
+      <inertia ixx="8.6271E-06" ixy="-8.8086E-11" ixz="-1.5492E-14" iyy="8.6276E-06" iyz="-2.9315E-15" izz="1.4513E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/bk_right_wheel_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.29804 0.29804 0.29804 1" />
+      </material>
+    </visual>
+    <collision>
+  <origin xyz="0 0 0.015" rpy="0 0 0"/>
+  <geometry>
+    <cylinder radius="0.0344"
+              length="0.030"/>
+  </geometry>
+</collision>
+</link>
+
+  <joint name="bk_right_wheel_joint" type="continuous">
+    <origin xyz="-0.065606 -0.1053 0.017279" rpy="-1.5708 0 0" />
+    <parent link="base_link" />
+    <child link="bk_right_wheel_link" />
+    <axis xyz="0 0 1" />
+    <limit effort="2.94" velocity="4.712" />
+    <dynamics damping="0.1" friction="0.1" />
+  </joint>
+
+  <!-- LiDAR -->
+  <link name="lidar_link">
+    <inertial>
+      <origin xyz="-7.7482E-05 4.4492E-08 0.018462" rpy="0 0 0" />
+      <mass value="0.74835" />
+      <inertia ixx="0.00025587" ixy="-6.21E-10" ixz="-7.6812E-07" iyy="0.00025778" iyz="9.5637E-11" izz="0.00031753" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/lidar_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.77647 0.75686 0.73725 1" />
+      </material>
+    </visual>
+    <collision>
+    <origin xyz="-0.0045 0 0.0206"/>
+    <geometry>
+        <cylinder radius="0.028"
+                  length="0.041"/>
+    </geometry>
+</collision>
+</link>
+
+  <joint name="lidar_joint" type="fixed">
+    <origin xyz="0.01495 0.00020855 0.133" rpy="0 0 0" />
+    <parent link="base_link" />
+    <child link="lidar_link" />
+  </joint>
+
+  <!-- Camera -->
+  <link name="camera_link">
+    <inertial>
+      <origin xyz="0.011556 1.1396E-05 -0.00013598" rpy="0 0 0" />
+      <mass value="0.10791" />
+      <inertia ixx="7.1255E-05" ixy="-1.7934E-08" ixz="4.9224E-08" iyy="7.7102E-06" iyz="-2.5269E-10" izz="7.0257E-05" />
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <mesh filename="package://virtual_lab/meshes/camera_link.STL" />
+      </geometry>
+      <material name="">
+        <color rgba="0.86667 0.9098 1 1" />
+      </material>
+    </visual>
+<collision>
+    <origin xyz="0.012 0 0"/>
+    <geometry>
+        <box size="0.024 0.030 0.024"/>
+    </geometry>
+</collision>	
+</link>
+
+  <joint name="camera_joint" type="fixed">
+    <origin xyz="0.06293 0 0.088176" rpy="0 -0.43241 0" />
+    <parent link="base_link" />
+    <child link="camera_link" />
+  </joint>
+
+  <joint type="fixed" name="camera_optical_joint">
+    <origin xyz="0 0 0" rpy="-1.5707 0 -1.5707"/>
+    <child link="camera_link_optical"/>
+    <parent link="camera_link"/>
+  </joint>
+
+  <link name="camera_link_optical"> </link>
+  
+  <!-- Imu -->  
+  <joint name="imu_joint" type="fixed">
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <parent link="base_link"/>
+    <child link="imu_link" />
+  </joint>
+
+  <link name="imu_link"> </link>
+</robot>

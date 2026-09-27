@@ -81,11 +81,7 @@ function RobotStatusPanel() {
                     ROBOT <i>STATUS</i>
                 </h2>
                 <span className="text-xs text-[#8e988f]">4 units</span>
-            </div>
-            <div className="flex-1 overflow-y-auto px-3.5 pb-3.5">
-                {robots.map((robot) => (
                     <RobotStatus key={robot.id} robot={robot} />
-                ))}
             </div>
         </section>
     );

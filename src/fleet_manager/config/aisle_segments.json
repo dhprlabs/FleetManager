@@ -1,0 +1,162 @@
+{
+  "aisle_1": {
+    "id": "aisle_1",
+    "segment_id": "aisle_1",
+    "name": "Aisle 1",
+    "x_min": 2.696,
+    "x_max": 4.763,
+    "y_min": -10.827,
+    "y_max": -6.137,
+    "is_single_lane": true
+  },
+  "aisle_2": {
+    "id": "aisle_2",
+    "segment_id": "aisle_2",
+    "name": "Aisle 2",
+    "x_min": -0.007,
+    "x_max": 1.742,
+    "y_min": -10.748,
+    "y_max": -6.137,
+    "is_single_lane": true
+  },
+  "aisle_3": {
+    "id": "aisle_3",
+    "segment_id": "aisle_3",
+    "name": "Aisle 3",
+    "x_min": -6.128,
+    "x_max": -4.459,
+    "y_min": -10.589,
+    "y_max": -5.978,
+    "is_single_lane": true
+  },
+  "aisle_4": {
+    "id": "aisle_4",
+    "segment_id": "aisle_4",
+    "name": "Aisle 4",
+    "x_min": -8.911,
+    "x_max": -7.082,
+    "y_min": -10.668,
+    "y_max": -5.898,
+    "is_single_lane": true
+  },
+  "aisle_5": {
+    "id": "aisle_5",
+    "segment_id": "aisle_5",
+    "name": "Aisle 5",
+    "x_min": -8.752,
+    "x_max": -6.923,
+    "y_min": -4.547,
+    "y_max": 0.064,
+    "is_single_lane": true
+  },
+  "aisle_6": {
+    "id": "aisle_6",
+    "segment_id": "aisle_6",
+    "name": "Aisle 6",
+    "x_min": -6.049,
+    "x_max": -4.3,
+    "y_min": -4.706,
+    "y_max": -0.015,
+    "is_single_lane": true
+  },
+  "aisle_7": {
+    "id": "aisle_7",
+    "segment_id": "aisle_7",
+    "name": "Aisle 7",
+    "x_min": -0.007,
+    "x_max": 1.901,
+    "y_min": -4.706,
+    "y_max": -0.095,
+    "is_single_lane": true
+  },
+  "aisle_8": {
+    "id": "aisle_8",
+    "segment_id": "aisle_8",
+    "name": "Aisle 8",
+    "x_min": 2.776,
+    "x_max": 4.763,
+    "y_min": -4.706,
+    "y_max": -0.015,
+    "is_single_lane": true
+  },
+  "aisle_9": {
+    "id": "aisle_9",
+    "segment_id": "aisle_9",
+    "name": "Aisle 9",
+    "x_min": -8.831,
+    "x_max": -6.685,
+    "y_min": 1.336,
+    "y_max": 6.027,
+    "is_single_lane": true
+  },
+  "aisle_10": {
+    "id": "aisle_10",
+    "segment_id": "aisle_10",
+    "name": "Aisle 10",
+    "x_min": -5.89,
+    "x_max": -4.22,
+    "y_min": 1.257,
+    "y_max": 5.947,
+    "is_single_lane": true
+  },
+  "aisle_11": {
+    "id": "aisle_11",
+    "segment_id": "aisle_11",
+    "name": "Aisle 11",
+    "x_min": 0.232,
+    "x_max": 1.901,
+    "y_min": 1.257,
+    "y_max": 5.947,
+    "is_single_lane": true
+  },
+  "aisle_12": {
+    "id": "aisle_12",
+    "segment_id": "aisle_12",
+    "name": "Aisle 12",
+    "x_min": 2.935,
+    "x_max": 4.922,
+    "y_min": 1.257,
+    "y_max": 5.947,
+    "is_single_lane": true
+  },
+  "aisle_13": {
+    "id": "aisle_13",
+    "segment_id": "aisle_13",
+    "name": "Aisle 13",
+    "x_min": -8.752,
+    "x_max": -6.685,
+    "y_min": 6.981,
+    "y_max": 11.433,
+    "is_single_lane": true
+  },
+  "aisle_14": {
+    "id": "aisle_14",
+    "segment_id": "aisle_14",
+    "name": "Aisle 14",
+    "x_min": -5.81,
+    "x_max": -3.982,
+    "y_min": 6.822,
+    "y_max": 11.433,
+    "is_single_lane": true
+  },
+  "aisle_15": {
+    "id": "aisle_15",
+    "segment_id": "aisle_15",
+    "name": "Aisle 15",
+    "x_min": 0.311,
+    "x_max": 1.901,
+    "y_min": 6.583,
+    "y_max": 11.274,
+    "is_single_lane": true
+  },
+  "aisle_16": {
+    "id": "aisle_16",
+    "segment_id": "aisle_16",
+    "name": "Aisle 16",
+    "x_min": 3.014,
+    "x_max": 4.922,
+    "y_min": 6.583,
+    "y_max": 11.433,
+    "is_single_lane": true
+  }
+}

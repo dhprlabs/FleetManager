@@ -1,0 +1,11 @@
+<launch>
+    <arg name="world" default="nav.sdf" description="Name of the gazebo world file" />
+    <let name="pkg_basic_urdf" value="$(find-pkg-share virtual_lab)" />
+    <let name="pkg_ros_gz_sim" value="$(find-pkg-share ros_gz_sim)" />
+    <let name="world_file" value="$(var pkg_basic_urdf)/worlds/$(var world)" />
+    <let name="gz_args" value="$(var world_file) -r" />
+    <include file="$(var pkg_ros_gz_sim)/launch/gz_sim.launch.py">
+        <arg name="gz_args" value="$(var gz_args)" />
+        <arg name="on_exit_shutdown" value="true" />
+    </include>
+</launch>

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState } from "react";
+import { initialTasks, mapPaths, robots } from "./fleetData";
 import warehouseMap from "./asset/logistics_warehouse.png";
-import { useRos, rosToSvg, svgToRos, MAP_CONFIG, DEFAULT_AISLES, normalizeAisles } from "./useRos";
 
-const baseViewBox = { x: 0, y: 0, w: MAP_CONFIG.width, h: MAP_CONFIG.height };
+const baseViewBox = { x: 0, y: 0, w: 900, h: 620 };
 const axisEnd = 600;
 const now = 220;
 const colors = {
@@ -19,59 +19,8 @@ const colors = {
 const font = { fontFamily: "IBM Plex Sans, sans-serif" };
 const displayFont = { fontFamily: "Space Grotesk, sans-serif" };
 
-// ─── Algorithm Overlay Helpers ───────────────────────────────────────────────
-
-/** Derive per-robot ORCA/PIBT status from last N traffic events */
-function useAlgoOverlay(trafficEvents) {
-    return useMemo(() => {
-        // Keep only the last 25 events; stale info fades automatically
-        const recent = trafficEvents.slice(-25);
-        const orca = {};   // robot_id → true if ORCA active right now
-        const pibt = {};   // robot_id → { waiting: bool, segment_id: str }
-        recent.forEach((ev) => {
-            if (ev.event === 'orca_avoidance') orca[ev.robot_id] = true;
-            if (ev.event === 'pibt_wait') pibt[ev.robot_id] = { waiting: true, segment_id: ev.segment_id || '' };
-            // A 'reservation_granted' or resolved event clears PIBT wait for that robot
-            if (ev.event === 'reservation_granted' && pibt[ev.robot_id]) pibt[ev.robot_id].waiting = false;
-        });
-        return { orca, pibt };
-    }, [trafficEvents]);
-}
-
-
 function statusColor(robot) {
     return robot.online ? robot.color : colors.offline;
-}
-
-// ── Single-lane aisle coordinate & occupancy helpers ─────────────────────────
-function aisleToSvgRect(aisle) {
-    const x1 = Math.min(aisle.x_min, aisle.x_max);
-    const x2 = Math.max(aisle.x_min, aisle.x_max);
-    const y1 = Math.min(aisle.y_min, aisle.y_max);
-    const y2 = Math.max(aisle.y_min, aisle.y_max);
-    const pTopLeft = rosToSvg(x1, y2);
-    const pBottomRight = rosToSvg(x2, y1);
-    return {
-        x: pTopLeft.x,
-        y: pTopLeft.y,
-        width: Math.max(2, pBottomRight.x - pTopLeft.x),
-        height: Math.max(2, pBottomRight.y - pTopLeft.y),
-    };
-}
-
-function getAisleOccupancy(aisleId, trafficEvents = []) {
-    for (let i = trafficEvents.length - 1; i >= 0; i--) {
-        const ev = trafficEvents[i];
-        if (ev.segment_id === aisleId) {
-            if (ev.event === 'reservation_granted' || ev.event === 'reservation_active') {
-                return { occupied: true, holder: ev.robot_id, event: ev.event };
-            }
-            if (ev.event === 'reservation_released' || ev.event === 'reservation_expired' || ev.event === 'reservation_denied') {
-                break;
-            }
-        }
-    }
-    return { occupied: false, holder: null, event: null };
 }
 
 function RobotStatus({ robot }) {
@@ -87,7 +36,7 @@ function RobotStatus({ robot }) {
                 className="relative flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[9px] border border-[#e3e6e1] bg-white text-xs font-semibold text-[#6b776f]"
                 style={displayFont}
             >
-                {robot.id.slice(-2)}
+                {robot.id.slice(2)}
                 <span
                     className="absolute -bottom-0.5 -right-0.5 h-[9px] w-[9px] rounded-full border-2 border-[#f7f8f6]"
                     style={{ backgroundColor: statusColor(robot) }}
@@ -96,7 +45,7 @@ function RobotStatus({ robot }) {
             <div className="min-w-0 flex-1">
                 <div className="text-[12.5px] font-semibold">{robot.id}</div>
                 <div className="mt-0.5 truncate text-[11px] text-[#6b776f]">
-                    {robot.online ? (robot.task && robot.task !== '—' ? robot.task : 'Idle') : 'Under maintenance'}
+                    {robot.online ? robot.task : "Under maintenance"}
                 </div>
             </div>
             <div className="flex-none text-right">
@@ -114,412 +63,31 @@ function RobotStatus({ robot }) {
                 </div>
                 <div className="mt-0.5 text-[10px] text-[#8e988f]">
                     {robot.online
-                        ? robot.task && robot.task !== '—'
-                            ? robot.state === 'warn' ? 'Low battery' : 'Active'
-                            : 'Idle'
-                        : 'Offline'}
+                        ? robot.task.includes("charger")
+                            ? "Charging"
+                            : "Online"
+                        : "Offline"}
                 </div>
             </div>
         </div>
     );
 }
 
-
-function RobotStatusPanel({ robots }) {
+function RobotStatusPanel() {
     return (
         <section className="flex w-full flex-none flex-col border-b border-[#c4cbc5] bg-white md:w-[260px] md:border-b-0 md:border-r md:border-[#c4cbc5] xl:w-[340px]">
             <div className="flex flex-none items-center justify-between px-[18px] pb-2.5 pt-3.5">
                 <h2 className="m-0 text-[15px] font-semibold" style={displayFont}>
                     ROBOT <i>STATUS</i>
                 </h2>
-                <span className="text-xs text-[#8e988f]">{robots.length} units</span>
-            </div>
-            <div className="flex-1 overflow-y-auto px-3.5 pb-3.5">
-                {robots.map((robot) => (
+                <span className="text-xs text-[#8e988f]">4 units</span>
                     <RobotStatus key={robot.id} robot={robot} />
-                ))}
             </div>
         </section>
     );
 }
 
-// ─── DockStationLayer ─────────────────────────────────────────────────────────
-/**
- * Renders a distinct home-dock icon for each robot on the SVG map.
- * Shows a pulsing ring when a robot is actively returning to its dock.
- */
-function DockStationLayer({ robots, dockStations, visible }) {
-    if (!visible) return null;
-    return (
-        <g id="dock-station-layer">
-            {robots.map((robot) => {
-                const dock = dockStations[robot.id];
-                if (!dock) return null;
-                const cx = dock.svgX;
-                const cy = dock.svgY;
-                const robotColor = robot.color || '#2f6f5e';
-                // Is this robot currently in dock-return mode? (idle + no task)
-                const returning = robot.online && !robot.task && robot.task !== '—';
-                return (
-                    <g key={`dock-${robot.id}`}>
-                        {/* Outer subtle ring */}
-                        <circle cx={cx} cy={cy} r="10" fill={robotColor} fillOpacity="0.08"
-                            stroke={robotColor} strokeWidth="1" strokeOpacity="0.35" strokeDasharray="3 2" />
-                        {/* Pulsing ring when robot is returning */}
-                        {returning && (
-                            <circle cx={cx} cy={cy} r="14" fill="none"
-                                stroke={robotColor} strokeWidth="1.2" strokeOpacity="0.55"
-                                style={{ animation: 'pibtBlink 1.4s step-start infinite' }} />
-                        )}
-                        {/* Home icon background disc */}
-                        <circle cx={cx} cy={cy} r="7" fill={robotColor} fillOpacity="0.9" />
-                        {/* Home symbol (simplified SVG house) */}
-                        <g transform={`translate(${cx - 4.5}, ${cy - 5})`} fill="white">
-                            {/* Roof */}
-                            <polygon points="4.5,0 9,4.5 0,4.5" fillOpacity="0.95" />
-                            {/* Walls */}
-                            <rect x="1.5" y="4.5" width="6" height="5" fillOpacity="0.9" />
-                            {/* Door */}
-                            <rect x="3.2" y="6.5" width="2.6" height="3" fill={robotColor} fillOpacity="0.8" />
-                        </g>
-                        {/* Robot ID label */}
-                        <text x={cx} y={cy + 18} fill={robotColor} fontSize="7" fontWeight="700"
-                            textAnchor="middle" fontFamily="IBM Plex Sans, sans-serif"
-                            style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}>
-                            {robot.id}
-                        </text>
-                    </g>
-                );
-            })}
-        </g>
-    );
-}
-
-// ─── NavPathLayer ─────────────────────────────────────────────────────────────
-/** Renders the Nav2 planned route polyline for each robot as an animated dashed path */
-function NavPathLayer({ robots, navPaths, visible }) {
-    if (!visible) return null;
-    return (
-        <g id="nav-path-layer">
-            {robots.map((robot) => {
-                const pts = navPaths[robot.id];
-                if (!pts || pts.length < 2) return null;
-                const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ');
-                return (
-                    <g key={`navpath-${robot.id}`}>
-                        {/* Glow under-layer */}
-                        <path
-                            d={d}
-                            fill="none"
-                            stroke={robot.color}
-                            strokeWidth="4"
-                            strokeOpacity="0.12"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
-                        {/* Animated dash line */}
-                        <path
-                            d={d}
-                            fill="none"
-                            stroke={robot.color}
-                            strokeWidth="1.6"
-                            strokeOpacity="0.78"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeDasharray="5 4"
-                            style={{ animation: 'navPathMarch 0.8s linear infinite' }}
-                        />
-                        {/* Destination arrowhead at last point */}
-                        {(() => {
-                            const last = pts[pts.length - 1];
-                            const prev = pts[pts.length - 2];
-                            const angle = Math.atan2(last.y - prev.y, last.x - prev.x) * (180 / Math.PI);
-                            return (
-                                <polygon
-                                    points="0,-5 4,4 -4,4"
-                                    fill={robot.color}
-                                    fillOpacity="0.9"
-                                    stroke="white"
-                                    strokeWidth="1"
-                                    transform={`translate(${last.x},${last.y}) rotate(${angle + 90})`}
-                                />
-                            );
-                        })()}
-                        {/* Small label */}
-                        {pts.length > 3 && (() => {
-                            const mid = pts[Math.floor(pts.length / 2)];
-                            return (
-                                <text
-                                    x={mid.x + 3}
-                                    y={mid.y - 4}
-                                    fill={robot.color}
-                                    fontSize="7"
-                                    fontWeight="700"
-                                    fontFamily="IBM Plex Sans, sans-serif"
-                                    style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
-                                >
-                                    {robot.id} nav2
-                                </text>
-                            );
-                        })()}
-                    </g>
-                );
-            })}
-        </g>
-    );
-}
-
-// ─── OrcaVectorLayer ─────────────────────────────────────────────────────────
-/** Shows a pulsing red halo + avoidance arrow on robots currently under ORCA */
-function OrcaVectorLayer({ robots, orcaActive, visible }) {
-    if (!visible) return null;
-    return (
-        <g id="orca-layer">
-            {robots.filter((r) => orcaActive[r.id]).map((robot) => (
-                <g key={`orca-${robot.id}`}>
-                    {/* Animated warning ring */}
-                    <circle
-                        cx={robot.x}
-                        cy={robot.y}
-                        r="16"
-                        fill="none"
-                        stroke="#ef4444"
-                        strokeWidth="1.5"
-                        strokeOpacity="0.75"
-                        strokeDasharray="3 3"
-                        style={{ animation: 'orcaPulse 1s ease-in-out infinite' }}
-                    />
-                    {/* ORCA badge */}
-                    <rect
-                        x={robot.x - 14}
-                        y={robot.y - 28}
-                        width="28"
-                        height="11"
-                        rx="3"
-                        fill="#ef4444"
-                        fillOpacity="0.92"
-                    />
-                    <text
-                        x={robot.x}
-                        y={robot.y - 20}
-                        fill="white"
-                        fontSize="7"
-                        fontWeight="800"
-                        textAnchor="middle"
-                        fontFamily="IBM Plex Sans, sans-serif"
-                    >
-                        ORCA
-                    </text>
-                </g>
-            ))}
-        </g>
-    );
-}
-
-// ─── PibtBlockageLayer ───────────────────────────────────────────────────────
-/** Shows PIBT yield/wait badges and a stop bar on blocked robots */
-function PibtBlockageLayer({ robots, pibtStatus, visible }) {
-    if (!visible) return null;
-    return (
-        <g id="pibt-layer">
-            {robots.filter((r) => pibtStatus[r.id]?.waiting).map((robot) => {
-                const status = pibtStatus[robot.id];
-                return (
-                    <g key={`pibt-${robot.id}`}>
-                        {/* Stop octagon ring */}
-                        <circle
-                            cx={robot.x}
-                            cy={robot.y}
-                            r="14"
-                            fill="#f59e0b"
-                            fillOpacity="0.15"
-                            stroke="#f59e0b"
-                            strokeWidth="2"
-                            strokeDasharray="4 2"
-                            style={{ animation: 'pibtBlink 1.2s step-start infinite' }}
-                        />
-                        {/* PIBT badge */}
-                        <rect
-                            x={robot.x - 18}
-                            y={robot.y - 30}
-                            width="36"
-                            height="12"
-                            rx="3"
-                            fill="#92400e"
-                            fillOpacity="0.92"
-                        />
-                        <text
-                            x={robot.x}
-                            y={robot.y - 21}
-                            fill="white"
-                            fontSize="7"
-                            fontWeight="800"
-                            textAnchor="middle"
-                            fontFamily="IBM Plex Sans, sans-serif"
-                        >
-                            PIBT WAIT
-                        </text>
-                        {/* Segment label if known */}
-                        {status.segment_id && (
-                            <text
-                                x={robot.x}
-                                y={robot.y - 11}
-                                fill="#92400e"
-                                fontSize="6.5"
-                                fontWeight="600"
-                                textAnchor="middle"
-                                fontFamily="IBM Plex Sans, sans-serif"
-                                style={{ filter: 'drop-shadow(0 1px 2px rgba(255,255,255,0.9))' }}
-                            >
-                                {status.segment_id}
-                            </text>
-                        )}
-                    </g>
-                );
-            })}
-        </g>
-    );
-}
-
-// ─── AlgorithmLegend ─────────────────────────────────────────────────────────
-/** Toggle-able legend panel for the map overlays */
-function AlgorithmLegend({ showNavPath, showOrca, showPibt, onToggle }) {
-    const [open, setOpen] = useState(true);
-    return (
-        <div className="absolute bottom-16 left-4 z-[6]">
-            <div className="rounded-[9px] border border-[#e3e6e1] bg-white/96 shadow-[0_2px_10px_rgba(27,35,31,0.1)] backdrop-blur-sm overflow-hidden">
-                <button
-                    className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-[11px] font-bold text-[#1b231f] hover:bg-[#f7f8f6] transition-colors"
-                    onClick={() => setOpen((o) => !o)}
-                    title="Toggle algorithm overlay legend"
-                >
-                    <span className="flex items-center gap-1.5">
-                        <span>🧠</span>
-                        <span>Algo Overlays</span>
-                    </span>
-                    <span className="text-[#8e988f]">{open ? '▾' : '▸'}</span>
-                </button>
-                {open && (
-                    <div className="border-t border-[#eceee9] px-3 py-2 space-y-1.5">
-                        {[
-                            { key: 'navPath', label: 'Nav2 Planned Route', color: '#3978b7', icon: '─ ─', active: showNavPath },
-                            { key: 'orca', label: 'ORCA Avoidance', color: '#ef4444', icon: '◎', active: showOrca },
-                            { key: 'pibt', label: 'PIBT Yield Wait', color: '#f59e0b', icon: '⏸', active: showPibt },
-                        ].map(({ key, label, color, icon, active }) => (
-                            <button
-                                key={key}
-                                onClick={() => onToggle(key)}
-                                className="flex w-full items-center gap-2 rounded-[5px] px-1.5 py-1 text-left text-[10.5px] font-medium transition-colors hover:bg-[#f7f8f6]"
-                                style={{ opacity: active ? 1 : 0.45 }}
-                            >
-                                <span className="flex h-4 w-4 items-center justify-center rounded text-[11px]" style={{ color }}>{icon}</span>
-                                <span className="flex-1 text-[#374151]">{label}</span>
-                                <span
-                                    className="h-3 w-3 rounded border"
-                                    style={{ background: active ? color : 'transparent', borderColor: color, opacity: 0.85 }}
-                                />
-                            </button>
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-}
-
-// ─── TrafficEventToast (Map-overlay live feed) ───────────────────────────────
-/** Shows the last 4 live ORCA/PIBT/reservation events as a compact ticker on the map */
-function TrafficEventToast({ trafficEvents }) {
-    const recent = trafficEvents.slice(-4).reverse();
-    if (recent.length === 0) return null;
-
-    const icon = (ev) => {
-        if (ev.event === 'orca_avoidance') return { emoji: '↔', color: '#ef4444' };
-        if (ev.event === 'pibt_wait') return { emoji: '⏸', color: '#f59e0b' };
-        if (ev.event === 'reservation_granted') return { emoji: '✓', color: '#2f6f5e' };
-        if (ev.event === 'reservation_released') return { emoji: '↑', color: '#3978b7' };
-        if (ev.event === 'reservation_requested') return { emoji: '?', color: '#6366f1' };
-        if (ev.event === 'reservation_expired') return { emoji: '⚠', color: '#c0453b' };
-        return { emoji: '●', color: '#6b776f' };
-    };
-
-    const label = (ev) => {
-        const seg = ev.segment_id ? ` · ${ev.segment_id}` : '';
-        const labels = {
-            orca_avoidance: `ORCA active${seg}`,
-            pibt_wait: `PIBT yield${seg}`,
-            reservation_granted: `Aisle granted${seg}`,
-            reservation_released: `Aisle free${seg}`,
-            reservation_requested: `Aisle request${seg}`,
-            reservation_expired: `Lease expired${seg}`,
-        };
-        return labels[ev.event] || ev.event?.replaceAll('_', ' ');
-    };
-
-    return (
-        <div className="absolute left-4 bottom-4 z-[7] flex flex-col gap-1 pointer-events-none">
-            {recent.map((ev, i) => {
-                const { emoji, color } = icon(ev);
-                return (
-                    <div
-                        key={`toast-${i}-${ev.timestamp_utc}`}
-                        className="flex items-center gap-2 rounded-[7px] border border-[#e3e6e1] bg-white/96 px-2.5 py-1 text-[10.5px] shadow-sm backdrop-blur-sm"
-                        style={{ opacity: 1 - i * 0.22 }}
-                    >
-                        <span className="text-[12px] font-bold" style={{ color }}>{emoji}</span>
-                        <span className="font-semibold" style={{ color }}>{ev.robot_id || 'fleet'}</span>
-                        <span className="text-[#4a554e]">{label(ev)}</span>
-                    </div>
-                );
-            })}
-        </div>
-    );
-}
-
-
-function MapScale({ mapScale }) {
-    const scaleOptions = [0.5, 1, 2, 5, 10, 20, 50];
-    const zoom = mapScale?.zoom ?? 100;
-    const pixelsPerMeter = mapScale?.pixelsPerMeter ?? 20;
-    const distance = [...scaleOptions].reverse().find((option) => option * pixelsPerMeter <= 130) || 0.5;
-    const width = Math.max(24, Math.round(distance * pixelsPerMeter));
-
-    return (
-        <div className="flex items-center gap-2 rounded-[8px] border border-[#e3e6e1] bg-white/95 px-2.5 py-1 text-[11px] font-medium text-[#4a554e] shadow-sm backdrop-blur-sm" aria-label={`Map scale: ${distance} meters at ${zoom}% zoom`}>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[#8e988f]">Scale</span>
-            <div className="relative h-2 border-b-2 border-l-2 border-r-2 border-[#2f6f5e]" style={{ width }} />
-            <span className="whitespace-nowrap font-medium">{distance} m</span>
-            <span className="text-[#8e988f]">• {zoom}%</span>
-        </div>
-    );
-}
-
-function MapPanel({
-    robots,
-    selectionMode,
-    selectedPoints,
-    tasks,
-    stagedTasks = [],
-    onPointSelect,
-    dockInfo,
-    aisles = [],
-    selectedAisleId = null,
-    onSelectAisle = () => { },
-    aisleDrawingMode = false,
-    aisleCorners = [],
-    onAisleCornerSelect = () => { },
-    onCancelAisleDraw = () => { },
-    onOpenAisleManager = () => { },
-    trafficEvents = [],
-    onZoomChange = () => { },
-    // Algorithm overlays
-    navPaths = {},
-    orcaActive = {},
-    pibtStatus = {},
-    // Dock station layer
-    dockStations = {},
-    onSaveBroadcaster = () => false,
-}) {
+function MapPanel({ selectionMode, selectedPoints, tasks, onPointSelect }) {
     const svgRef = useRef(null);
     const instructionRef = useRef(null);
     const [viewBox, setViewBox] = useState(baseViewBox);
@@ -527,72 +95,10 @@ function MapPanel({
     const [mapPixels, setMapPixels] = useState(null);
     const [blockedMessage, setBlockedMessage] = useState("");
     const [instructionHovered, setInstructionHovered] = useState(false);
-    const [hoverMapPoint, setHoverMapPoint] = useState(null);
-    const [pixelsPerMeter, setPixelsPerMeter] = useState(20);
-    // Overlay visibility toggles
-    const [showNavPath, setShowNavPath] = useState(true);
-    const [showOrca, setShowOrca] = useState(true);
-    const [showPibt, setShowPibt] = useState(true);
-    const [broadcasterX, setBroadcasterX] = useState("");
-    const [broadcasterY, setBroadcasterY] = useState("");
-    const [broadcasterError, setBroadcasterError] = useState("");
     const zoom = Math.round((baseViewBox.w / viewBox.w) * 100);
-    const currentTaskNum = stagedTasks.length + 1;
-
-    useEffect(() => {
-        if (!dockInfo) return;
-        setBroadcasterX(String(dockInfo.rosX ?? ""));
-        setBroadcasterY(String(dockInfo.rosY ?? ""));
-    }, [dockInfo?.rosX, dockInfo?.rosY]);
-
-    function handleBroadcasterSave(event) {
-        event.preventDefault();
-        const x = Number(broadcasterX);
-        const y = Number(broadcasterY);
-        const maxX = MAP_CONFIG.originX + MAP_CONFIG.width * MAP_CONFIG.resolution;
-        const maxY = MAP_CONFIG.originY + MAP_CONFIG.height * MAP_CONFIG.resolution;
-        if (!Number.isFinite(x) || !Number.isFinite(y)) {
-            setBroadcasterError("Enter valid X and Y coordinates.");
-            return;
-        }
-        if (x < MAP_CONFIG.originX || x > maxX || y < MAP_CONFIG.originY || y > maxY) {
-            setBroadcasterError("Position must be inside the active map.");
-            return;
-        }
-        if (!onSaveBroadcaster(x, y)) {
-            setBroadcasterError("ROS is offline; the broadcaster was not moved.");
-            return;
-        }
-        setBroadcasterError("");
-    }
-
-    function handleOverlayToggle(key) {
-        if (key === 'navPath') setShowNavPath((v) => !v);
-        if (key === 'orca') setShowOrca((v) => !v);
-        if (key === 'pibt') setShowPibt((v) => !v);
-    }
-
-    useEffect(() => {
-        function reportScale() {
-            const rect = svgRef.current?.getBoundingClientRect();
-            if (!rect || !rect.width || !rect.height) return;
-            const pixelsPerMapUnit = Math.min(rect.width / viewBox.w, rect.height / viewBox.h);
-            const ppm = pixelsPerMapUnit / MAP_CONFIG.resolution;
-            setPixelsPerMeter(ppm);
-            onZoomChange?.({
-                zoom,
-                pixelsPerMeter: ppm,
-            });
-        }
-
-        reportScale();
-        const observer = new ResizeObserver(reportScale);
-        if (svgRef.current) observer.observe(svgRef.current);
-        return () => observer.disconnect();
-    }, [onZoomChange, viewBox.h, viewBox.w, zoom]);
-
+    const activeTaskNumber = Math.max(0, ...tasks.map((task) => task.number || 0)) + 1;
     function activeLabelPosition(point) {
-        const overlapsExisting = [...tasks, ...stagedTasks].some((task) =>
+        const overlapsExisting = tasks.some((task) =>
             [task.start, task.end].some((endpoint) =>
                 endpoint && Math.hypot(endpoint.x - point.x, endpoint.y - point.y) < 28,
             ),
@@ -656,18 +162,7 @@ function MapPanel({
         );
         zoomBy(event.deltaY > 0 ? 1.1 : 0.9, location.x, location.y);
     }
-
-    // Attach wheel listener with passive: false to allow preventDefault
-    useEffect(() => {
-        const svg = svgRef.current;
-        if (!svg) return;
-        svg.addEventListener('wheel', handleWheel, { passive: false });
-        return () => svg.removeEventListener('wheel', handleWheel, { passive: false });
-    }, []);
-
     function handlePointerMove(event) {
-        const point = getMapPoint(event);
-        setHoverMapPoint({ x: Math.round(point.x), y: Math.round(point.y) });
         const instructionBounds = instructionRef.current?.getBoundingClientRect();
         setInstructionHovered(Boolean(
             instructionBounds &&
@@ -689,27 +184,20 @@ function MapPanel({
         return point.matrixTransform(svgRef.current.getScreenCTM().inverse());
     }
     function handleMapClick(event) {
-        if (drag) return;
+        if (!selectionMode || drag) return;
         const point = getMapPoint(event);
         if (point.x < 0 || point.x > baseViewBox.w || point.y < 0 || point.y > baseViewBox.h) return;
 
-        if (aisleDrawingMode) {
-            onAisleCornerSelect({ x: Math.round(point.x), y: Math.round(point.y) });
-            return;
-        }
-
-        if (!selectionMode) return;
-
         if (mapPixels) {
-            const imageX = Math.min(mapPixels.width - 1, Math.max(0, Math.floor((point.x / baseViewBox.w) * mapPixels.width)));
-            const imageY = Math.min(mapPixels.height - 1, Math.max(0, Math.floor((point.y / baseViewBox.h) * mapPixels.height)));
+            const imageX = Math.min(mapPixels.width - 1, Math.floor((point.x / baseViewBox.w) * mapPixels.width));
+            const imageY = Math.min(mapPixels.height - 1, Math.floor((point.y / baseViewBox.h) * mapPixels.height));
             const pixelIndex = (imageY * mapPixels.width + imageX) * 4;
             const red = mapPixels.data.data[pixelIndex];
             const green = mapPixels.data.data[pixelIndex + 1];
-            // In logistics_warehouse.png: 0 = wall, 205 = unknown/outside, 254 = free floor
-            const isBlocked = red < 128 || (red === 205 && green === 205);
-            if (isBlocked) {
-                setBlockedMessage(red < 128 ? "That point is on a wall. Choose an open floor area." : "That point is outside mapped warehouse area.");
+            const blue = mapPixels.data.data[pixelIndex + 2];
+            const isWall = red === green && green === blue && red < 240;
+            if (isWall) {
+                setBlockedMessage("That point is on a wall. Choose an open floor area.");
                 return;
             }
         }
@@ -718,12 +206,13 @@ function MapPanel({
         onPointSelect({ x: Math.round(point.x), y: Math.round(point.y) });
     }
     return (
-        <section className="relative flex min-h-[300px] flex-1 flex-col overflow-hidden bg-[#CFCFCF]">
+        <section className="relative min-h-[300px] flex-1 overflow-hidden bg-[#D6D6D6]">
             <svg
                 ref={svgRef}
-                className={`block min-h-0 w-full flex-1 select-none bg-[#CFCFCF] ${aisleDrawingMode || selectionMode ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab"}`}
+                className={`block h-full w-full select-none bg-[#D6D6D6] ${selectionMode ? "cursor-crosshair" : drag ? "cursor-grabbing" : "cursor-grab"}`}
                 style={{ userSelect: "none" }}
                 viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
+                onWheel={handleWheel}
                 onPointerDown={(event) => {
                     setDrag({ startX: event.clientX, startY: event.clientY, viewBox });
                     event.currentTarget.setPointerCapture(event.pointerId);
@@ -733,487 +222,123 @@ function MapPanel({
                 onPointerUp={() => setDrag(null)}
                 onClick={handleMapClick}
             >
-                {/* Render at the OccupancyGrid's native pixel dimensions. */}
                 <image
                     href={warehouseMap}
                     x="0"
                     y="0"
-                    width={MAP_CONFIG.width}
-                    height={MAP_CONFIG.height}
-                    preserveAspectRatio="xMidYMid meet"
-                    opacity="1"
+                    width="900"
+                    height="620"
+                    preserveAspectRatio="none"
+                    opacity=".82"
                 />
-
-                {/* Single-Lane Aisle Mutual Exclusion Zones */}
-                <g id="single-lane-aisles-layer">
-                    {aisles.map((aisle) => {
-                        const rect = aisleToSvgRect(aisle);
-                        const occ = getAisleOccupancy(aisle.segment_id || aisle.id, trafficEvents);
-                        const isSelected = selectedAisleId === (aisle.segment_id || aisle.id);
-                        const strokeColor = occ.occupied ? "#f59e0b" : isSelected ? "#3b82f6" : "#6366f1";
-                        const fillColor = occ.occupied ? "#fef3c7" : isSelected ? "#e0e7ff" : "#eef2ff";
-                        const fillOpacity = occ.occupied ? 0.38 : isSelected ? 0.32 : 0.16;
-
-                        return (
-                            <g
-                                key={aisle.segment_id || aisle.id}
-                                className="cursor-pointer"
-                                onClick={(e) => {
-                                    e.stopPropagation();
-                                    onSelectAisle(aisle);
-                                }}
-                            >
-                                {occ.occupied && (
-                                    <rect
-                                        x={rect.x - 2}
-                                        y={rect.y - 2}
-                                        width={rect.width + 4}
-                                        height={rect.height + 4}
-                                        rx="4"
-                                        fill="none"
-                                        stroke="#f59e0b"
-                                        strokeWidth="1.2"
-                                        strokeDasharray="4 2"
-                                        className="animate-[pulse_2s_ease-in-out_infinite]"
-                                    />
-                                )}
-                                <rect
-                                    x={rect.x}
-                                    y={rect.y}
-                                    width={rect.width}
-                                    height={rect.height}
-                                    rx="3"
-                                    fill={fillColor}
-                                    fillOpacity={fillOpacity}
-                                    stroke={strokeColor}
-                                    strokeWidth={isSelected ? "2.2" : "1.2"}
-                                    strokeDasharray={occ.occupied ? "none" : "3 3"}
-                                />
-                                {/* Clean status label badge */}
-                                <g transform={`translate(${rect.x + 3}, ${rect.y + 3})`}>
-                                    <rect
-                                        x="0"
-                                        y="0"
-                                        width={Math.min(Math.max(46, (aisle.name || aisle.id).length * 5.2 + 26), Math.max(22, rect.width - 6))}
-                                        height="12"
-                                        rx="2"
-                                        fill={occ.occupied ? "#b45309" : isSelected ? "#1d4ed8" : "#4338ca"}
-                                        fillOpacity="0.88"
-                                    />
-                                    <text
-                                        x="4"
-                                        y="9"
-                                        fill="#ffffff"
-                                        fontFamily="IBM Plex Sans, sans-serif"
-                                        fontSize="7.5"
-                                        fontWeight="700"
-                                    >
-                                        {aisle.name || aisle.id} {occ.occupied ? `• ${occ.holder}` : "• 1-Way"}
-                                    </text>
-                                </g>
-                            </g>
-                        );
-                    })}
-
-                    {/* Interactive Drawing Preview */}
-                    {aisleDrawingMode && aisleCorners.length === 1 && (
-                        <g>
-                            <circle
-                                cx={aisleCorners[0].x}
-                                cy={aisleCorners[0].y}
-                                r="5"
-                                fill="#6366f1"
-                                stroke="white"
-                                strokeWidth="2"
-                            />
-                            {hoverMapPoint && (
-                                <>
-                                    <rect
-                                        x={Math.min(aisleCorners[0].x, hoverMapPoint.x)}
-                                        y={Math.min(aisleCorners[0].y, hoverMapPoint.y)}
-                                        width={Math.max(2, Math.abs(hoverMapPoint.x - aisleCorners[0].x))}
-                                        height={Math.max(2, Math.abs(hoverMapPoint.y - aisleCorners[0].y))}
-                                        rx="3"
-                                        fill="#6366f1"
-                                        fillOpacity="0.22"
-                                        stroke="#6366f1"
-                                        strokeWidth="1.8"
-                                        strokeDasharray="4 3"
-                                    />
-                                    {(() => {
-                                        const r1 = svgToRos(aisleCorners[0].x, aisleCorners[0].y);
-                                        const r2 = svgToRos(hoverMapPoint.x, hoverMapPoint.y);
-                                        const dx = Math.abs(r2.x - r1.x).toFixed(2);
-                                        const dy = Math.abs(r2.y - r1.y).toFixed(2);
-                                        const midX = (aisleCorners[0].x + hoverMapPoint.x) / 2;
-                                        const minY = Math.min(aisleCorners[0].y, hoverMapPoint.y);
-                                        return (
-                                            <text
-                                                x={midX}
-                                                y={Math.max(12, minY - 6)}
-                                                fill="#4338ca"
-                                                fontSize="9"
-                                                fontWeight="700"
-                                                textAnchor="middle"
-                                                style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
-                                            >
-                                                {`Corridor bounds (${dx}m × ${dy}m)`}
-                                            </text>
-                                        );
-                                    })()}
-                                </>
-                            )}
-                        </g>
-                    )}
-                </g>
-
-                {/* Task routes & markers */}
+                {mapPaths.map((path) => (
+                    <path
+                        key={path.d}
+                        d={path.d}
+                        fill="none"
+                        stroke={path.warn ? colors.amber : colors.pine}
+                        strokeDasharray="1 6"
+                        strokeLinecap="round"
+                        strokeWidth="1.6"
+                        opacity=".7"
+                    />
+                ))}
                 {tasks.map((task) => task.start && task.end && (
                     <g key={`${task.name}-${task.number}`}>
-                        {/* Connecting trajectory between pickup and dropoff */}
-                        <line
-                            x1={task.start.x}
-                            y1={task.start.y}
-                            x2={task.end.x}
-                            y2={task.end.y}
-                            stroke={task.robot ? colors.pine : colors.amber}
-                            strokeWidth="1.8"
-                            strokeDasharray="4 3"
-                            strokeOpacity="0.7"
-                        />
-                        {/* Pickup marker (Start) */}
-                        <circle
-                            cx={task.start.x}
-                            cy={task.start.y}
-                            r="6"
-                            fill={colors.rust}
-                            stroke="white"
-                            strokeWidth="1.5"
-                        />
-                        <text
-                            x={task.start.x}
-                            y={task.start.y - 8}
-                            fill={colors.rust}
-                            fontSize="8"
-                            fontWeight="700"
-                            textAnchor="middle"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.9))" }}
-                        >
-                            {`P${task.number || task.name}`}
+                        <polygon points={`${task.start.x},${task.start.y - 8} ${task.start.x - 7},${task.start.y + 6} ${task.start.x + 7},${task.start.y + 6}`} fill={colors.rust} stroke={colors.rust} strokeWidth="2" strokeLinejoin="round" />
+                        <text x={task.start.x + 12} y={task.start.y - 10} fill={colors.rust} fontSize="11" fontWeight="700">
+                            {`S${task.number}`}
                         </text>
-                        {/* Dropoff marker (End) */}
-                        <circle
-                            cx={task.end.x}
-                            cy={task.end.y}
-                            r="6"
-                            fill={colors.pine}
-                            stroke="white"
-                            strokeWidth="1.5"
-                        />
-                        <text
-                            x={task.end.x}
-                            y={task.end.y - 8}
-                            fill={colors.pine}
-                            fontSize="8"
-                            fontWeight="700"
-                            textAnchor="middle"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.9))" }}
-                        >
-                            {`D${task.number || task.name}`}
+                        <polygon points={`${task.end.x},${task.end.y - 8} ${task.end.x - 7},${task.end.y + 6} ${task.end.x + 7},${task.end.y + 6}`} fill={colors.pine} stroke={colors.pine} strokeWidth="2" strokeLinejoin="round" />
+                        <text x={task.end.x + 12} y={task.end.y - 10} fill={colors.pine} fontSize="11" fontWeight="700">
+                            {`E${task.number}`}
                         </text>
                     </g>
                 ))}
-
-                {/* Staged Tasks (Ready to Broadcast) */}
-                {stagedTasks.map((task) => task.start && task.end && (
-                    <g key={`staged-${task.id || task.name}`}>
-                        <line
-                            x1={task.start.x}
-                            y1={task.start.y}
-                            x2={task.end.x}
-                            y2={task.end.y}
-                            stroke="#e67e22"
-                            strokeWidth="2"
-                            strokeDasharray="4 3"
-                            strokeOpacity="0.85"
-                        />
-                        {/* Staged Pickup */}
-                        <circle cx={task.start.x} cy={task.start.y} r="6" fill="#e67e22" stroke="white" strokeWidth="1.5" />
-                        <text
-                            x={task.start.x}
-                            y={task.start.y - 8}
-                            fill="#e67e22"
-                            fontSize="8"
-                            fontWeight="800"
-                            textAnchor="middle"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
-                        >
-                            {`P${task.number || task.name}`}
-                        </text>
-                        {/* Staged Dropoff */}
-                        <circle cx={task.end.x} cy={task.end.y} r="6" fill="#27ae60" stroke="white" strokeWidth="1.5" />
-                        <text
-                            x={task.end.x}
-                            y={task.end.y - 8}
-                            fill="#27ae60"
-                            fontSize="8"
-                            fontWeight="800"
-                            textAnchor="middle"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
-                        >
-                            {`D${task.number || task.name}`}
-                        </text>
-                    </g>
-                ))}
-
-                {/* Point selection preview when creating new tasks */}
                 {selectionMode && selectedPoints.map((point, index) => (
                     <g key={`${point.x}-${point.y}`}>
-                        <circle
-                            cx={point.x}
-                            cy={point.y}
-                            r="7"
-                            fill={index === 0 ? colors.rust : colors.pine}
-                            stroke="white"
-                            strokeWidth="2"
-                        />
+                        <polygon points={`${point.x},${point.y - 10} ${point.x - 8},${point.y + 7} ${point.x + 8},${point.y + 7}`} fill={index === 0 ? colors.rust : colors.pine} stroke={index === 0 ? colors.rust : colors.pine} strokeWidth="2" strokeLinejoin="round" />
                         <text
                             x={activeLabelPosition(point).x}
                             y={activeLabelPosition(point).y}
                             fill={index === 0 ? colors.rust : colors.pine}
-                            fontSize="10"
+                            fontSize="11"
                             fontWeight="700"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.9))" }}
                         >
-                            {index === 0 ? `Pickup (T${currentTaskNum})` : `Dropoff (T${currentTaskNum})`}
+                            {index === 0 ? `S${activeTaskNumber}` : `E${activeTaskNumber}`}
                         </text>
                     </g>
                 ))}
-
-                {/* Task Broadcaster Station & RF Coverage (Light & Compact) */}
-                {dockInfo && (
-                    <g id="task-broadcaster-layer">
-                        {/* Subtle, Lightweight RF Coverage Zone */}
-                        <circle
-                            cx={dockInfo.x}
-                            cy={dockInfo.y}
-                            r={dockInfo.radiusPx}
-                            fill="#f59e0b"
-                            fillOpacity="0.035"
-                            stroke="#f59e0b"
-                            strokeDasharray="4 4"
-                            strokeWidth="1"
-                            strokeOpacity="0.45"
-                        />
-
-                        {/* Compact Dock Station Base Pad (12x12 px, matching robot scale) */}
-                        <rect
-                            x={dockInfo.x - 6}
-                            y={dockInfo.y - 6}
-                            width="12"
-                            height="12"
-                            rx="3"
-                            fill="#ffffff"
-                            stroke="#f59e0b"
-                            strokeWidth="1.5"
-                            style={{ filter: "drop-shadow(0px 1px 3px rgba(0,0,0,0.15))" }}
-                        />
-                        {/* Broadcaster antenna core dot */}
-                        <circle
-                            cx={dockInfo.x}
-                            cy={dockInfo.y}
-                            r="2.5"
-                            fill="#f59e0b"
-                        />
-                        <circle
-                            cx={dockInfo.x}
-                            cy={dockInfo.y}
-                            r="0.8"
-                            fill="#ffffff"
-                        />
-
-                        {/* Clean, lightweight side labels matching robot label styling */}
-                        <text
-                            x={dockInfo.x + 9}
-                            y={dockInfo.y - 2}
-                            fill="#92400e"
-                            fontFamily="IBM Plex Sans, sans-serif"
-                            fontSize="8"
-                            fontWeight="700"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
-                        >
-                            Broadcaster
-                        </text>
-                        <text
-                            x={dockInfo.x + 9}
-                            y={dockInfo.y + 7}
-                            fill="#78350f"
-                            fontFamily="IBM Plex Sans, sans-serif"
-                            fontSize="7"
-                            fontWeight="500"
-                            style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
-                        >
-                            6m RF range
-                        </text>
-                    </g>
-                )}
-
-                {/* ── Algorithm Overlay Layers (ordered: nav path → ORCA → PIBT → robots) */}
-                <NavPathLayer robots={robots} navPaths={navPaths} visible={showNavPath} />
-                <OrcaVectorLayer robots={robots} orcaActive={orcaActive} visible={showOrca} />
-                <PibtBlockageLayer robots={robots} pibtStatus={pibtStatus} visible={showPibt} />
-                {/* Dock Station Markers (always visible, below robots) */}
-                <DockStationLayer robots={robots} dockStations={dockStations} visible={true} />
-
-                {/* Fleet Robots */}
                 <g>
                     {robots.map((robot) => (
                         <g key={robot.id}>
                             {robot.online && (
                                 <>
-                                    {/* Simulated 6m P2P communication radius. */}
                                     <circle
                                         cx={robot.x}
                                         cy={robot.y}
-                                        r={6 / MAP_CONFIG.resolution}
-                                        fill={robot.colorDim}
-                                        fillOpacity=".18"
+                                        r="115"
+                                        fill={
+                                            robot.colorDim
+                                        }
+                                        fillOpacity=".42"
                                         stroke={robot.color}
-                                        strokeDasharray="3 4"
-                                        strokeWidth="1"
-                                        strokeOpacity=".55"
+                                        strokeDasharray="2 5"
+                                        strokeOpacity=".75"
                                     />
                                     <circle
                                         className="origin-center animate-[pulse_3s_ease-out_infinite]"
                                         cx={robot.x}
                                         cy={robot.y}
-                                        r={6 / MAP_CONFIG.resolution}
+                                        r="115"
                                         fill="none"
                                         stroke={robot.color}
-                                        strokeDasharray="3 4"
-                                        strokeWidth="1"
-                                        strokeOpacity=".35"
+                                        strokeDasharray="2 5"
+                                        strokeWidth="1.4"
+                                        strokeOpacity=".75"
                                     />
                                 </>
                             )}
-                            {/* Heading arrow if angle is known */}
-                            {robot.angleDeg !== undefined && (
-                                <polygon
-                                    points="0,-12 4.5,0 -4.5,0"
-                                    fill={robot.color}
-                                    stroke="white"
-                                    strokeWidth="1"
-                                    transform={`translate(${robot.x}, ${robot.y}) rotate(${robot.angleDeg})`}
-                                />
-                            )}
-                            {/* Robot chassis circle (~70cm diameter = 7px radius at 0.05m/px) */}
                             <circle
                                 cx={robot.x}
                                 cy={robot.y}
                                 r="7"
-                                fill={robot.online ? robot.color : colors.offline}
+                                fill={
+                                    robot.online ? robot.color : colors.offline
+                                }
                                 stroke="white"
                                 strokeWidth="2"
                             />
-                            {/* Robot ID label */}
                             <text
-                                x={robot.x + 10}
-                                y={robot.y - 4}
+                                x={robot.x + 12}
+                                y={robot.y - 6}
                                 fill="#1b231f"
                                 fontFamily="IBM Plex Sans, sans-serif"
-                                fontSize="9.5"
-                                fontWeight="700"
-                                style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
+                                fontSize="10.5"
+                                fontWeight="600"
                             >
                                 {robot.id}
                             </text>
                             <text
-                                x={robot.x + 10}
-                                y={robot.y + 7}
-                                fill="#4a554e"
+                                x={robot.x + 12}
+                                y={robot.y + 8}
+                                fill="#6b776f"
                                 fontFamily="IBM Plex Sans, sans-serif"
-                                fontSize="8"
-                                fontWeight="600"
-                                style={{ filter: "drop-shadow(0px 1px 2px rgba(255,255,255,0.95))" }}
+                                fontSize="9"
                             >
                                 {robot.online
                                     ? robot.state === "warn"
                                         ? "low battery"
-                                        : `${robot.battery}% • ${robot.task && robot.task !== '—' ? robot.task : 'idle'}`
+                                        : "active"
                                     : "offline"}
                             </text>
                         </g>
                     ))}
                 </g>
             </svg>
-
-            {/* Broadcaster RF Status Tag */}
-            {dockInfo && (
-                <form onSubmit={handleBroadcasterSave} className="absolute left-4 top-4 z-[6] rounded-[8px] border border-[#f59e0b]/40 bg-white/95 px-3 py-2 text-[#92400e] shadow-sm backdrop-blur-sm">
-                    <div className="flex items-center gap-2 text-[11.5px] font-semibold">
-                        <span className="relative flex h-2.5 w-2.5">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#f59e0b] opacity-75"></span>
-                            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[#d97706]"></span>
-                        </span>
-                        <span>Task broadcaster</span>
-                        <span className="rounded border border-[#fcd34d] bg-[#fef3c7] px-1.5 py-0.5 text-[10px] font-bold text-[#b45309]">
-                            {dockInfo.radiusMeters}m RF
-                        </span>
-                    </div>
-                    <div className="mt-1.5 flex items-end gap-1.5">
-                        <label className="text-[10px] font-semibold">X
-                            <input aria-label="Broadcaster X coordinate" value={broadcasterX} onChange={(event) => setBroadcasterX(event.target.value)} type="number" step="0.001" className="ml-1 w-16 rounded border border-[#fcd34d] bg-white px-1.5 py-1 text-[11px] text-[#1b231f] outline-none focus:border-[#d97706]" />
-                        </label>
-                        <label className="text-[10px] font-semibold">Y
-                            <input aria-label="Broadcaster Y coordinate" value={broadcasterY} onChange={(event) => setBroadcasterY(event.target.value)} type="number" step="0.001" className="ml-1 w-16 rounded border border-[#fcd34d] bg-white px-1.5 py-1 text-[11px] text-[#1b231f] outline-none focus:border-[#d97706]" />
-                        </label>
-                        <button type="submit" className="rounded bg-[#d97706] px-2 py-1 text-[10px] font-bold text-white hover:bg-[#b45309]">Apply</button>
-                    </div>
-                    {broadcasterError && <div className="mt-1 text-[9.5px] font-medium text-[#c0453b]">{broadcasterError}</div>}
-                </form>
-            )}
-
-            {/* Top-Right Quick Aisle Controls */}
-            <div className="absolute top-4 right-4 z-[6] flex items-center gap-2">
-                {aisleDrawingMode ? (
-                    <button
-                        onClick={onCancelAisleDraw}
-                        className="flex items-center gap-1 rounded-[8px] border border-[#c0453b]/40 bg-white/95 px-3 py-1.5 text-xs font-bold text-[#c0453b] shadow-sm backdrop-blur-sm hover:bg-[#f6e4e1] transition-colors"
-                    >
-                        ✕ Cancel Draw
-                    </button>
-                ) : (
-                    <button
-                        onClick={onOpenAisleManager}
-                        className="flex items-center gap-1.5 rounded-[8px] border border-[#6366f1]/30 bg-white/95 px-3 py-1.5 text-xs font-bold text-[#4338ca] shadow-sm backdrop-blur-sm hover:bg-[#eef2ff] transition-colors"
-                        title="View & configure single-lane aisle reservation zones"
-                    >
-                        <span>🛣️</span>
-                        <span>Aisles ({aisles.length})</span>
-                    </button>
-                )}
-            </div>
-
-            {aisleDrawingMode && (
-                <div className="absolute left-1/2 top-4 z-[7] -translate-x-1/2 flex items-center gap-3 rounded-[9px] border border-[#6366f1] bg-[#1e1b4b]/95 px-4 py-2 text-xs font-semibold text-white shadow-lg backdrop-blur-sm">
-                    <span className="h-2 w-2 rounded-full bg-[#818cf8] animate-ping" />
-                    <span>
-                        {aisleCorners.length === 0
-                            ? "Click Map: Set Corner 1 of single-lane corridor"
-                            : "Click Map: Set opposite Corner 2 to finish bounds"}
-                    </span>
-                    <button
-                        onClick={onCancelAisleDraw}
-                        className="ml-1 rounded bg-white/20 px-2 py-0.5 text-[11px] font-bold text-white hover:bg-white/30"
-                    >
-                        Cancel
-                    </button>
-                </div>
-            )}
-
             {selectionMode && (
-                <div ref={instructionRef} className={`pointer-events-none absolute left-1/2 top-4 z-[6] -translate-x-1/2 rounded-[9px] border border-[#b9d8c9] bg-white px-3.5 py-2 text-center text-xs font-semibold text-[#2f6f5e] shadow-[0_2px_8px_rgb(27_35_31_/_8%)] transition-opacity duration-150 ${instructionHovered ? "bg-white/75 opacity-80" : "opacity-100"}`}>
-                    {selectedPoints.length === 0 ? `Click map to set Task ${currentTaskNum} PICKUP` : `Click map to set Task ${currentTaskNum} DROPOFF`}
+                <div ref={instructionRef} className={`pointer-events-none absolute left-1/2 top-4 z-[6] -translate-x-1/2 rounded-[9px] border border-[#b9d8c9] bg-white px-3.5 py-2 text-center text-xs font-medium text-[#2f6f5e] shadow-[0_2px_8px_rgb(27_35_31_/_8%)] transition-opacity duration-150 ${instructionHovered ? "bg-white/75 opacity-80" : "opacity-100"}`}>
+                    {selectedPoints.length === 0 ? "Click an open area to set the start" : "Click an open area to set the destination"}
                 </div>
             )}
             {blockedMessage && (
@@ -1222,24 +347,9 @@ function MapPanel({
                     {blockedMessage}
                 </div>
             )}
-
-
-            {/* Algorithm Overlay Legend */}
-            <AlgorithmLegend
-                showNavPath={showNavPath}
-                showOrca={showOrca}
-                showPibt={showPibt}
-                onToggle={handleOverlayToggle}
-            />
-
-            {/* Live Traffic Event Ticker (ORCA / PIBT / Reservation events) */}
-            <TrafficEventToast trafficEvents={trafficEvents} />
-
-            {/* Scale Bar */}
-            <div className="absolute bottom-4 right-[50px] z-[6]">
-                <MapScale mapScale={{ zoom, pixelsPerMeter }} />
+            <div className="absolute bottom-4 left-4 z-[6] rounded-full border border-[#e3e6e1] bg-white px-[9px] py-1 text-[11px] text-[#8e988f]">
+                {zoom}%
             </div>
-
             <div className="absolute bottom-4 right-4 z-[6] flex flex-col overflow-hidden rounded-[9px] border border-[#e3e6e1] bg-white shadow-[0_2px_8px_rgb(27_35_31_/_6%)]">
                 <button
                     className="h-[34px] w-[34px] border-b border-[#eceee9] bg-white text-base text-[#1b231f] hover:bg-[#f7f8f6]"
@@ -1267,210 +377,80 @@ function MapPanel({
     );
 }
 
-function TaskStatusPanel({
-    tasks,
-    robots = [],
-    stagedTasks = [],
-    selectionMode,
-    onAdd,
-    onCancel,
-    onDelete,
-    onBroadcastStaged,
-    onStageFive,
-    onRemoveStaged,
-    onClearStaged,
-}) {
-    // ── Local / Global view toggle ─────────────────────────────────────────
-    // 'global' = show all fleet tasks; any robot id = filter to that robot only.
-    const [viewMode, setViewMode] = useState('global');
-
-    const robotIds = robots.map((r) => r.id);
-
-    // Compute display tasks based on current view mode
-    const displayTasks = viewMode === 'global'
-        ? tasks
-        : tasks.filter((t) => t.robot === viewMode);
-
-    const onTimeCompletion = displayTasks.length
-        ? Math.round(displayTasks.reduce((total, task) => total + task.progress, 0) / displayTasks.length)
+function TaskStatusPanel({ tasks, selectionMode, onAdd, onCancel, onDelete }) {
+    const onTimeCompletion = tasks.length
+        ? Math.round(tasks.reduce((total, task) => total + task.progress, 0) / tasks.length)
         : 0;
     return (
-        <section className="flex max-h-[360px] w-full flex-none flex-col border-t border-[#c4cbc5] bg-white md:max-h-none md:w-[280px] md:border-l md:border-t-0 md:border-[#c4cbc5] xl:w-[350px]">
-            <div className="flex flex-none flex-wrap items-center justify-between gap-1.5 px-[16px] pb-2 pt-3">
-                <h2 className="m-0 text-[14.5px] font-bold tracking-tight text-[#1b231f]" style={displayFont}>
+        <section className="flex max-h-[300px] w-full flex-none flex-col border-t border-[#c4cbc5] bg-white md:max-h-none md:w-[260px] md:border-l md:border-t-0 md:border-[#c4cbc5] xl:w-[340px]">
+            <div className="flex flex-none items-center justify-between px-[18px] pb-2.5 pt-3.5">
+                <h2 className="m-0 text-[15px] font-semibold" style={displayFont}>
                     TASK <i>STATUS</i>
                 </h2>
-                <div className="flex items-center gap-1.5">
-                    {onStageFive && (
-                        <button
-                            className="flex items-center gap-1 rounded-full border border-[#d6ded8] bg-[#f7f8f6] px-2.5 py-1 text-[11px] font-semibold text-[#4a554e] hover:bg-[#eceee9] transition-colors"
-                            onClick={onStageFive}
-                            title="Quick-fill 5 warehouse tasks"
-                        >
-                            <span>⚡</span>
-                            <span>5 Preset</span>
-                        </button>
-                    )}
-                    <button
-                        className={`relative flex h-6 items-center justify-start rounded-full pl-6 pr-2.5 text-[11px] font-semibold transition-colors ${selectionMode
-                            ? "bg-[#f6e4e1] text-[#c0453b] hover:bg-[#efc7c2]"
-                            : "bg-[#e4efe9] text-[#2f6f5e] hover:bg-[#d9ecdf]"
-                            }`}
-                        onClick={selectionMode ? onCancel : onAdd}
-                        aria-label={selectionMode ? "Cancel staging" : "Add task via map"}
+                <button
+                    className="ml-auto flex w-[92px] items-center justify-center whitespace-nowrap rounded-full bg-[#e4efe9] px-3 py-1.5 text-xs font-semibold text-[#2f6f5e] hover:bg-[#d9ecdf]"
+                    onClick={selectionMode ? onCancel : onAdd}
+                    aria-label={selectionMode ? "Cancel task creation" : "Add task"}
+                >
+                    <span
+                        className={`mr-1 inline-block text-sm leading-none transition-transform duration-200 ${selectionMode ? "rotate-45" : "rotate-0"}`}
                     >
-                        <span className={`absolute left-2.5 top-1/2 inline-block w-3 -translate-y-1/2 text-center text-xs leading-none transition-transform duration-200 ${selectionMode ? "rotate-45" : "rotate-0"}`}>
-                            +
-                        </span>
-                        {selectionMode ? "Cancel" : "Add Task"}
-                    </button>
-                </div>
-            </div>
-
-            {/* STAGED TASKS BATCH (Ready to broadcast all at once) */}
-            {stagedTasks.length > 0 && (
-                <div className="mx-3.5 mb-2 rounded-[9px] border border-[#2f6f5e]/30 bg-[#eef6f2] p-2.5 shadow-xs">
-                    <div className="flex items-center justify-between pb-1.5 border-b border-[#2f6f5e]/15">
-                        <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-[#2f6f5e]">
-                            <span className="inline-block h-2 w-2 rounded-full bg-[#2f6f5e] animate-pulse" />
-                            STAGED BATCH
-                        </span>
-                        <button
-                            onClick={onClearStaged}
-                            className="text-[10.5px] font-medium text-[#8e988f] hover:text-[#c0453b]"
-                        >
-                            Clear all
-                        </button>
-                    </div>
-                    <div className="my-2 max-h-32 space-y-1.5 overflow-y-auto pr-0.5">
-                        {stagedTasks.map((st) => (
-                            <div
-                                key={st.id}
-                                className="flex items-center justify-between gap-1.5 rounded-[6px] border border-[#dce8e0] bg-white px-2 py-1 text-[11px]"
-                            >
-                                <span className="font-bold text-[#1b231f]">{st.name}</span>
-                                <span className="truncate text-[10px] text-[#6b776f]">
-                                    P: ({st.pickupRos?.x?.toFixed(1) ?? '?'}, {st.pickupRos?.y?.toFixed(1) ?? '?'})m → D: ({st.dropoffRos?.x?.toFixed(1) ?? '?'}, {st.dropoffRos?.y?.toFixed(1) ?? '?'})m
-                                </span>
-                                <button
-                                    onClick={() => onRemoveStaged(st.id)}
-                                    className="flex h-4 w-4 flex-none items-center justify-center rounded text-xs text-[#8e988f] hover:bg-[#f6e4e1] hover:text-[#c0453b]"
-                                    title="Remove task from staged batch"
-                                >
-                                    ×
-                                </button>
-                            </div>
-                        ))}
-                    </div>
-                    <button
-                        onClick={onBroadcastStaged}
-                        className="w-full flex items-center justify-center gap-1.5 rounded-[7px] bg-[#2f6f5e] py-1.5 text-xs font-bold text-white shadow-sm hover:bg-[#265b4d] active:scale-[0.99] transition-all"
-                    >
-                        <span></span>
-                        <span>Broadcast Fleet Tasks ({stagedTasks.length})</span>
-                    </button>
-                </div>
-            )}
-
-            {/* ── View mode toggle tabs ─────────────────────────────────────── */}
-            <div className="border-b border-[#eceee9] px-[16px] pb-2 pt-1">
-                <div className="flex items-center justify-between">
-                    <span className="text-[12px] font-semibold text-[#6b776f]">
-                        {viewMode === 'global' ? 'Fleet Task Pool' : `${viewMode} — local view`}
+                        +
                     </span>
-                    <div className="flex items-baseline gap-1.5">
-                        <span className="font-bold text-[13px] text-[#2f6f5e]">{onTimeCompletion}%</span>
-                        <span className="text-[10.5px] text-[#8e988f]">completion</span>
-                    </div>
-                </div>
-                {/* Tab strip */}
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                    <button
-                        id="task-view-global"
-                        onClick={() => setViewMode('global')}
-                        className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${viewMode === 'global'
-                            ? 'bg-[#2f6f5e] text-white'
-                            : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
-                            }`}
+                    {selectionMode ? "Cancel" : "Add task"}
+                </button>
+            </div>
+            <div className="border-b border-[#eceee9] px-[18px] pb-3 pt-1">
+                <div className="flex items-baseline gap-2">
+                    <div
+                        className="font-semibold leading-none text-[#2f6f5e]"
+                        style={displayFont}
                     >
-                        Global
-                    </button>
-                    {robotIds.map((rid) => (
-                        <button
-                            key={rid}
-                            id={`task-view-${rid}`}
-                            onClick={() => setViewMode(rid)}
-                            className={`rounded-full px-2.5 py-0.5 text-[10.5px] font-semibold transition-colors ${viewMode === rid
-                                ? 'bg-[#3978b7] text-white'
-                                : 'bg-[#eceee9] text-[#6b776f] hover:bg-[#e2e6e0]'
-                                }`}
-                        >
-                            {rid}
-                        </button>
-                    ))}
+                        {onTimeCompletion}%
+                    </div>
+                    <div className="text-[13px] font-medium text-[#6b776f]">On-time completion</div>
                 </div>
             </div>
-
-            <div className="flex-1 overflow-y-auto px-3.5 py-2">
-                {/* Local-view banner */}
-                {viewMode !== 'global' && (
-                    <div className="mb-2 flex items-center gap-1.5 rounded-[7px] border border-[#3978b7]/25 bg-[#eaf2fb] px-2.5 py-1.5 text-[10.5px] text-[#2d618f]">
-                        <svg viewBox="0 0 24 24" className="h-3 w-3 flex-none" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="1.8" />
-                            <path d="M12 8v4M12 16h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-                        </svg>
-                        <span>Showing <b>{viewMode}</b>'s tasks from global CRDT view</span>
-                    </div>
-                )}
-                {displayTasks.length === 0 && (
-                    <div className="py-6 text-center text-xs text-[#8e988f]">
-                        {viewMode === 'global'
-                            ? <span>No active tasks in pool. Stage tasks above and click <b>Broadcast</b>.</span>
-                            : <span>No tasks assigned to <b>{viewMode}</b> yet.</span>
-                        }
-                    </div>
-                )}
-                {[...displayTasks].reverse().map((task, index) => (
+            <div className="flex-1 overflow-y-auto px-3.5 pb-3.5">
+                {[...tasks].reverse().map((task, index) => (
                     <div
-                        className="mb-2 rounded-[9px] border border-[#eceee9] bg-[#f7f8f6] p-[10px_11px]"
+                        className="mb-2 rounded-[9px] border border-[#eceee9] bg-[#f7f8f6] p-[11px_12px]"
                         key={`${task.name}-${index}`}
                     >
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <div className="text-[12.5px] font-bold text-[#1b231f]">{task.name}</div>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                            <div className="text-[13px] font-semibold">{task.name}</div>
                             <div className="flex items-center gap-1.5">
                                 <div
-                                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${task.state === 3 ? 'bg-[#e4efe9] text-[#2f6f5e]'
-                                        : task.state === 2 || task.state === 6 || task.state === 7 ? 'bg-[#fdf3e4] text-[#c97a2b]'
-                                            : task.assigned ? 'bg-[#e8e8f7] text-[#5a50a0]'
-                                                : 'bg-[#eceee9] text-[#6b776f]'
-                                        }`}
+                                    className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10.5px] font-medium ${task.assigned ? "bg-[#e4efe9] text-[#2f6f5e]" : "bg-[#eceee9] text-[#6b776f]"}`}
                                 >
-                                    {task.stateLabel || (task.assigned ? 'Assigned' : 'Available')}
+                                    {task.assigned ? "Assigned" : "Unassigned"}
                                 </div>
                                 {!task.assigned && (
                                     <button
-                                        className="flex h-5 w-5 items-center justify-center rounded-[5px] border border-[#e3e6e1] bg-white text-[#c0453b] hover:border-[#efc7c2] hover:bg-[#f6e4e1]"
+                                        className="flex h-6 w-6 items-center justify-center rounded-[6px] border border-[#e3e6e1] bg-white text-[#c0453b] hover:border-[#efc7c2] hover:bg-[#f6e4e1]"
                                         aria-label={`Delete ${task.name}`}
                                         title={`Delete ${task.name}`}
                                         onClick={() => onDelete(task.number)}
                                     >
-                                        <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" aria-hidden="true">
                                             <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7l1-3h4l1 3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                                         </svg>
                                     </button>
                                 )}
                             </div>
                         </div>
-                        <div className="mb-1.5 text-[11px] text-[#6b776f]">
+                        <div className="mb-2 text-[11.5px] text-[#6b776f]">
                             {task.assigned ? (
-                                <>Assigned to <b className="text-[#1b231f]">{task.robot}</b></>
+                                <>
+                                    Assigned to <b className="text-[#1b231f]">{task.robot}</b>
+                                </>
                             ) : (
-                                "Available in pool"
+                                "Waiting in queue"
                             )}
                         </div>
-                        <div className="h-[4px] overflow-hidden rounded-[2px] bg-[#eceee9]">
+                        <div className="h-[5px] overflow-hidden rounded-[3px] bg-[#eceee9]">
                             <div
-                                className="h-full rounded-[2px] bg-[#2f6f5e]"
+                                className="h-full rounded-[3px] bg-[#2f6f5e]"
                                 style={{ width: `${task.progress}%` }}
                             />
                         </div>
@@ -1529,117 +509,16 @@ function getTimelineRows(tasks) {
     }));
 }
 
-function formatDecision(event) {
-    const ownership = event.ownership || {};
-    const assignments = Object.entries(ownership)
-        .map(([task, robot]) => `${task} → ${robot}`)
-        .join(", ");
-    if (assignments) return assignments;
-    if (event.task_id) return `${event.task_id} → ${event.winner || event.robot_id || "pending"}`;
-    if (event.event === "allocation_skipped") return "No eligible tasks or robots";
-    if (event.event === "join_waiting_for_state_sync") return "Waiting for peer state sync";
-    return event.event?.replaceAll("_", " ") || "Allocator update";
-}
-
-function formatTrafficEvent(event) {
-    const segment = event.segment_id ? ` · ${event.segment_id}` : "";
-    if (event.event === "reservation_granted") return `Aisle granted${segment}`;
-    if (event.event === "reservation_queued") return `Waiting for aisle${segment}`;
-    if (event.event === "reservation_promoted") return `Aisle access promoted${segment}`;
-    if (event.event === "reservation_released") return `Aisle released${segment}`;
-    if (event.event === "reservation_expired") return `Stale aisle lease expired${segment}`;
-    if (event.event === "reservation_requested") return `Aisle requested${segment}`;
-    if (event.event === "orca_avoidance") return "ORCA collision avoidance active";
-    if (event.event === "pibt_wait") return `PIBT yielding at choke point${segment}`;
-    return event.event?.replaceAll("_", " ") || "Traffic update";
-}
-
-function AllocationPanel({ allocationEvents, trafficEvents, liveBundles }) {
-    const relevantEvents = allocationEvents.filter((event) => [
-        "allocation_decided",
-        "binary_round_decided",
-        "allocation_skipped",
-        "join_waiting_for_state_sync",
-    ].includes(event.event)).slice(-5).reverse();
-    const recentTraffic = trafficEvents.slice(-5).reverse();
-    const bundles = Object.entries(liveBundles).sort(([a], [b]) => a.localeCompare(b));
-
-    return (
-        <section className="flex min-h-0 flex-1 min-w-0 flex-col bg-white border-t border-[#c4cbc5] md:border-t-0 md:border-l md:border-[#c4cbc5] md:max-w-[48%] xl:max-w-[44%]">
-            <div className="flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
-                <h2 className="m-0 text-[13px] font-semibold" style={displayFont}>
-                    ALLOCATION <i>TRACE</i>
-                </h2>
-                <span className="text-[10.5px] text-[#8e988f]">Live ROS audit</span>
-            </div>
-            <div className="grid min-h-0 flex-1 grid-cols-1 divide-y divide-[#eceee9] overflow-y-auto md:grid-cols-2 md:divide-x md:divide-y-0">
-                <div className="p-3.5 md:p-4">
-                    <div className="mb-2 text-[10.5px] font-bold tracking-wide text-[#6b776f]">RECENT DECISIONS</div>
-                    {relevantEvents.length === 0 ? (
-                        <p className="m-0 text-xs text-[#8e988f]">Waiting for a fleet allocation event.</p>
-                    ) : (
-                        <div className="space-y-1.5">
-                            {relevantEvents.map((event, index) => (
-                                <div key={`${event.timestamp_utc || "event"}-${index}`} className="rounded-[7px] bg-[#f7f8f6] px-2.5 py-2">
-                                    <div className="flex items-center justify-between gap-2 text-[10px]">
-                                        <span className="font-bold uppercase text-[#2f6f5e]">{event.event?.replaceAll("_", " ")}</span>
-                                        <span className="text-[#8e988f]">{event.robot_id || "fleet"}</span>
-                                    </div>
-                                    <div className="mt-0.5 text-[11.5px] font-medium text-[#1b231f]">{formatDecision(event)}</div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                    <div className="mb-2 mt-4 text-[10.5px] font-bold tracking-wide text-[#6b776f]">TRAFFIC CONTROL</div>
-                    {recentTraffic.length === 0 ? (
-                        <p className="m-0 text-xs text-[#8e988f]">No reservation, ORCA, or PIBT events yet.</p>
-                    ) : (
-                        <div className="space-y-1.5">
-                            {recentTraffic.map((event, index) => {
-                                const isAlert = ["reservation_queued", "reservation_expired", "pibt_wait", "orca_avoidance"].includes(event.event);
-                                return (
-                                    <div key={`${event.timestamp_utc || "traffic"}-${index}`} className="rounded-[7px] bg-[#f7f8f6] px-2.5 py-2">
-                                        <div className="flex items-center justify-between gap-2 text-[10px]">
-                                            <span className={`font-bold uppercase ${isAlert ? "text-[#c97a2b]" : "text-[#3978b7]"}`}>{event.event?.replaceAll("_", " ")}</span>
-                                            <span className="text-[#8e988f]">{event.robot_id || "fleet"}</span>
-                                        </div>
-                                        <div className="mt-0.5 text-[11.5px] font-medium text-[#1b231f]">{formatTrafficEvent(event)}</div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </div>
-                <div className="p-3.5 md:p-4">
-                    <div className="mb-2 text-[10.5px] font-bold tracking-wide text-[#6b776f]">ROBOT BUNDLES</div>
-                    {bundles.length === 0 ? (
-                        <p className="m-0 text-xs text-[#8e988f]">No bundles published yet.</p>
-                    ) : (
-                        <div className="space-y-1.5">
-                            {bundles.map(([robotId, bundle]) => (
-                                <div key={robotId} className="flex items-center gap-2 rounded-[7px] bg-[#f7f8f6] px-2.5 py-2 text-[11.5px]">
-                                    <span className="font-bold text-[#3978b7]">{robotId}</span>
-                                    <span className="min-w-0 truncate text-[#4a554e]">{bundle.task_ids?.length ? bundle.task_ids.join(" → ") : "Idle"}</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </section>
-    );
-}
-
 function EfficiencyPanel({ tasks }) {
     const [fullScreen, setFullScreen] = useState(false);
     const [minimized, setMinimized] = useState(false);
 
     return (
         <section
-            className={`flex min-h-0 flex-1 min-w-0 flex-col bg-white ${fullScreen ? "fixed inset-0 z-40 h-screen" : minimized ? "h-9 flex-none" : "h-[270px] md:h-full"}`}
+            className={`flex flex-none flex-col border-t border-[#c4cbc5] bg-white ${fullScreen ? "fixed inset-0 z-40 h-screen" : minimized ? "h-9" : "h-[270px] md:h-[248px]"}`}
         >
-            <div className="relative flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
-                <h2 className="m-0 whitespace-nowrap text-[13px] font-semibold" style={displayFont}>
+            <div className="flex h-9 flex-none items-center justify-between border-b border-[#eceee9] px-3.5 md:px-5">
+                <h2 className="m-0 text-[13px] font-semibold" style={displayFont}>
                     EFFICIENCY <i>TIMELINE</i>
                 </h2>
                 <div className="flex items-center gap-1">
@@ -1671,107 +550,96 @@ function EfficiencyPanel({ tasks }) {
                             />
                         </svg>
                     </button>
-                    {!fullScreen && (
-                        <button
-                            className="flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
-                            aria-label={minimized ? "Show chart" : "Minimize chart"}
-                            title={minimized ? "Show timeline" : "Minimize timeline"}
-                            onClick={() => {
-                                setMinimized((current) => !current);
-                                setFullScreen(false);
-                            }}
-                        >
-                            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                                <path
-                                    d={minimized ? "m6 14 6-6 6 6" : "m6 10 6 6 6-6"}
-                                    stroke="currentColor"
-                                    strokeWidth="2"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                />
-                            </svg>
-                        </button>
-                    )}
+                    <button
+                        className="flex h-6 w-6 items-center justify-center rounded-full text-[#6b776f] hover:bg-[#f7f8f6]"
+                        aria-label={minimized ? "Show chart" : "Minimize chart"}
+                        onClick={() => {
+                            setMinimized((current) => !current);
+                            setFullScreen(false);
+                        }}
+                    >
+                        <span className="h-px w-3 bg-[#6b776f]" />
+                    </button>
                 </div>
             </div>
             {!minimized && (
                 <div className="min-h-0 flex-1 overflow-auto px-3.5 pb-3.5 md:px-5">
-                    <div className="flex min-w-[640px]">
-                        <div className="sticky left-0 z-[3] w-[140px] flex-none bg-white pt-[34px] md:w-[180px]">
-                            {getTimelineRows(tasks).map((row) => (
-                                <div
-                                    className="flex h-[30px] items-center gap-1 text-xs font-medium"
-                                    key={row.label}
-                                >
-                                    <span>{row.label}</span>
-                                    <span
-                                        className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ${row.bars[0].status === "delayed" ? "bg-[#f6e4e1] text-[#c0453b]" : "bg-[#e4efe9] text-[#2f6f5e]"}`}
-                                    >
-                                        {row.bars[0].status === "delayed"
-                                            ? "Delayed"
-                                            : row.bars[0].status === "done"
-                                                ? "Completed"
-                                                : row.bars[0].status === "scheduled"
-                                                    ? "Unassigned"
-                                                    : "In progress"}
-                                    </span>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="relative min-w-0 flex-1">
-                            <div className="relative h-[34px] border-b border-[#eceee9]">
-                                {Array.from({ length: 11 }, (_, index) => (
-                                    <div
-                                        className={`absolute top-2 text-[10.5px] text-[#8e988f] ${index === 0 ? "" : index === 10 ? "-translate-x-full" : "-translate-x-1/2"}`}
-                                        style={{ left: `${index * 10}%` }}
-                                        key={index}
-                                    >{`${8 + index}:00`}</div>
-                                ))}
-                            </div>
-                            {getTimelineRows(tasks).map((row) => (
-                                <div
-                                    className="relative h-[30px] border-b border-[#eceee9]"
-                                    key={row.label}
-                                >
-                                    {row.bars.map((bar) => (
-                                        <div
-                                            className={`absolute top-1.5 h-[18px] overflow-hidden rounded-[5px] ${bar.status === "scheduled" ? "border border-dashed border-[#8e988f] bg-transparent" : bar.status === "delayed" ? "border border-[#c0453b] bg-[#f6e4e1]" : "border border-[#2f6f5e] bg-[#e4efe9]"}`}
-                                            style={{
-                                                left: `${(bar.start / axisEnd) * 100}%`,
-                                                width: `${((bar.end - bar.start) / axisEnd) * 100}%`,
-                                            }}
-                                            key={`${row.label}-${bar.start}`}
-                                        >
-                                            {bar.status !== "scheduled" && (
-                                                <div
-                                                    className={`h-full opacity-85 ${bar.status === "delayed" ? "bg-[#c0453b]" : "bg-[#2f6f5e]"}`}
-                                                    style={{ width: `${bar.progress}%` }}
-                                                />
-                                            )}
-                                        </div>
-                                    ))}
-                                </div>
-                            ))}
+                <div className="flex min-w-[640px]">
+                    <div className="sticky left-0 z-[3] w-[140px] flex-none bg-white pt-[34px] md:w-[180px]">
+                        {getTimelineRows(tasks).map((row) => (
                             <div
-                                className="absolute top-0 z-[2] w-[1.5px] bg-[#c97a2b]"
-                                style={{
-                                    left: `${(now / axisEnd) * 100}%`,
-                                    height: `${getTimelineRows(tasks).length * 30 + 34}px`,
-                                }}
+                                className="flex h-[30px] items-center gap-1 text-xs font-medium"
+                                key={row.label}
                             >
-                                <span className="absolute -top-[18px] left-1 text-[10px] font-semibold text-[#c97a2b]">
-                                    now
+                                <span>{row.label}</span>
+                                <span
+                                    className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-medium ${row.bars[0].status === "delayed" ? "bg-[#f6e4e1] text-[#c0453b]" : "bg-[#e4efe9] text-[#2f6f5e]"}`}
+                                >
+                                    {row.bars[0].status === "delayed"
+                                        ? "Delayed"
+                                        : row.bars[0].status === "done"
+                                            ? "Completed"
+                                            : row.bars[0].status === "scheduled"
+                                                ? "Unassigned"
+                                                : "In progress"}
                                 </span>
                             </div>
-                        </div>
+                        ))}
                     </div>
+                    <div className="relative min-w-0 flex-1">
+                    <div className="relative h-[34px] border-b border-[#eceee9]">
+                        {Array.from({ length: 11 }, (_, index) => (
+                            <div
+                                className={`absolute top-2 text-[10.5px] text-[#8e988f] ${index === 0 ? "" : index === 10 ? "-translate-x-full" : "-translate-x-1/2"}`}
+                                style={{ left: `${index * 10}%` }}
+                                key={index}
+                            >{`${8 + index}:00`}</div>
+                        ))}
+                    </div>
+                    {getTimelineRows(tasks).map((row) => (
+                        <div
+                            className="relative h-[30px] border-b border-[#eceee9]"
+                            key={row.label}
+                        >
+                            {row.bars.map((bar) => (
+                                <div
+                                    className={`absolute top-1.5 h-[18px] overflow-hidden rounded-[5px] ${bar.status === "scheduled" ? "border border-dashed border-[#8e988f] bg-transparent" : bar.status === "delayed" ? "border border-[#c0453b] bg-[#f6e4e1]" : "border border-[#2f6f5e] bg-[#e4efe9]"}`}
+                                    style={{
+                                        left: `${(bar.start / axisEnd) * 100}%`,
+                                        width: `${((bar.end - bar.start) / axisEnd) * 100}%`,
+                                    }}
+                                    key={`${row.label}-${bar.start}`}
+                                >
+                                    {bar.status !== "scheduled" && (
+                                        <div
+                                            className={`h-full opacity-85 ${bar.status === "delayed" ? "bg-[#c0453b]" : "bg-[#2f6f5e]"}`}
+                                            style={{ width: `${bar.progress}%` }}
+                                        />
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    ))}
+                    <div
+                        className="absolute top-0 z-[2] w-[1.5px] bg-[#c97a2b]"
+                        style={{
+                            left: `${(now / axisEnd) * 100}%`,
+                            height: `${getTimelineRows(tasks).length * 30 + 34}px`,
+                        }}
+                    >
+                        <span className="absolute -top-[18px] left-1 text-[10px] font-semibold text-[#c97a2b]">
+                            now
+                        </span>
+                    </div>
+                </div>
+                </div>
                 </div>
             )}
         </section>
     );
 }
 
-function AddTaskModal({ robots = [], onClose, onConfirm }) {
+function AddTaskModal({ onClose, onConfirm }) {
     const [name, setName] = useState("");
     const [robot, setRobot] = useState("");
     return (
@@ -1849,678 +717,47 @@ function AddTaskModal({ robots = [], onClose, onConfirm }) {
     );
 }
 
-function AisleEditModal({ aisle, isNew = false, onClose, onSave }) {
-    const [name, setName] = useState(aisle?.name || "");
-    const [segId, setSegId] = useState(aisle?.segment_id || aisle?.id || "");
-    const [xMin, setXMin] = useState(aisle?.x_min !== undefined ? aisle.x_min.toString() : "0.0");
-    const [xMax, setXMax] = useState(aisle?.x_max !== undefined ? aisle.x_max.toString() : "2.0");
-    const [yMin, setYMin] = useState(aisle?.y_min !== undefined ? aisle.y_min.toString() : "0.0");
-    const [yMax, setYMax] = useState(aisle?.y_max !== undefined ? aisle.y_max.toString() : "2.0");
-    const [isSingleLane, setIsSingleLane] = useState(aisle?.is_single_lane ?? true);
-    const [error, setError] = useState("");
-
-    const handleSubmit = (e) => {
-        e.preventDefault();
-        const numX1 = parseFloat(xMin);
-        const numX2 = parseFloat(xMax);
-        const numY1 = parseFloat(yMin);
-        const numY2 = parseFloat(yMax);
-
-        if (isNaN(numX1) || isNaN(numX2) || isNaN(numY1) || isNaN(numY2)) {
-            setError("All bounds must be valid floating point numbers in meters.");
-            return;
-        }
-
-        const actualXMin = Math.min(numX1, numX2);
-        const actualXMax = Math.max(numX1, numX2);
-        const actualYMin = Math.min(numY1, numY2);
-        const actualYMax = Math.max(numY1, numY2);
-
-        if (actualXMax - actualXMin < 0.2 || actualYMax - actualYMin < 0.2) {
-            setError("Corridor must be at least 0.2m × 0.2m in dimension.");
-            return;
-        }
-
-        const finalId = (segId.trim() || `aisle_${Date.now().toString().slice(-4)}`).toLowerCase().replace(/\s+/g, "_");
-        const finalName = name.trim() || finalId;
-
-        onSave({
-            id: finalId,
-            segment_id: finalId,
-            name: finalName,
-            x_min: Math.round(actualXMin * 1000) / 1000,
-            x_max: Math.round(actualXMax * 1000) / 1000,
-            y_min: Math.round(actualYMin * 1000) / 1000,
-            y_max: Math.round(actualYMax * 1000) / 1000,
-            is_single_lane: isSingleLane,
-        });
-    };
-
-    return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[#1b231f]/40 backdrop-blur-[2px] p-4"
-            onClick={(e) => e.target === e.currentTarget && onClose()}
-        >
-            <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl border border-[#e3e6e1]">
-                <div className="flex items-center justify-between pb-3 border-b border-[#eceee9]">
-                    <div className="flex items-center gap-2">
-                        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#eef2ff] text-[#4338ca] text-sm font-bold">
-                            🛣️
-                        </span>
-                        <h3 className="text-base font-bold text-[#1b231f]" style={displayFont}>
-                            {isNew ? "Define New Single-Lane Aisle" : "Edit Aisle Configuration"}
-                        </h3>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-lg p-1 text-[#8e988f] hover:bg-[#f7f8f6] hover:text-[#1b231f]"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-                    {error && (
-                        <div className="rounded-lg border border-[#c0453b]/30 bg-[#fff5f3] px-3 py-2 text-xs font-semibold text-[#c0453b]">
-                            {error}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="mb-1 block text-[11px] font-semibold text-[#6b776f]">
-                                Display Name
-                            </label>
-                            <input
-                                className="w-full rounded-lg border border-[#e3e6e1] bg-[#f7f8f6] px-3 py-2 text-xs font-medium text-[#1b231f] outline-none focus:border-[#6366f1] focus:bg-white transition-colors"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                placeholder="e.g. Aisle 1"
-                                autoFocus
-                            />
-                        </div>
-                        <div>
-                            <label className="mb-1 block text-[11px] font-semibold text-[#6b776f]">
-                                Segment ID
-                            </label>
-                            <input
-                                className="w-full rounded-lg border border-[#e3e6e1] bg-[#f7f8f6] px-3 py-2 text-xs font-mono font-medium text-[#1b231f] outline-none focus:border-[#6366f1] focus:bg-white transition-colors"
-                                value={segId}
-                                onChange={(e) => setSegId(e.target.value)}
-                                placeholder="e.g. aisle_1"
-                            />
-                        </div>
-                    </div>
-
-                    <div className="rounded-xl border border-[#eceee9] bg-[#f9fafb] p-3.5 space-y-3">
-                        <div className="flex items-center justify-between">
-                            <span className="text-xs font-bold text-[#374151]">ROS Map Metric Coordinates (Meters)</span>
-                            <span className="text-[10px] text-[#6b776f]">logistics_warehouse frame</span>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2.5">
-                            <div>
-                                <label className="mb-1 block text-[10.5px] font-medium text-[#6b776f]">
-                                    X Min (m)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.05"
-                                    className="w-full rounded-lg border border-[#e3e6e1] bg-white px-2.5 py-1.5 text-xs font-mono text-[#1b231f] outline-none focus:border-[#6366f1]"
-                                    value={xMin}
-                                    onChange={(e) => setXMin(e.target.value)}
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-1 block text-[10.5px] font-medium text-[#6b776f]">
-                                    X Max (m)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.05"
-                                    className="w-full rounded-lg border border-[#e3e6e1] bg-white px-2.5 py-1.5 text-xs font-mono text-[#1b231f] outline-none focus:border-[#6366f1]"
-                                    value={xMax}
-                                    onChange={(e) => setXMax(e.target.value)}
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-1 block text-[10.5px] font-medium text-[#6b776f]">
-                                    Y Min (m)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.05"
-                                    className="w-full rounded-lg border border-[#e3e6e1] bg-white px-2.5 py-1.5 text-xs font-mono text-[#1b231f] outline-none focus:border-[#6366f1]"
-                                    value={yMin}
-                                    onChange={(e) => setYMin(e.target.value)}
-                                />
-                            </div>
-                            <div>
-                                <label className="mb-1 block text-[10.5px] font-medium text-[#6b776f]">
-                                    Y Max (m)
-                                </label>
-                                <input
-                                    type="number"
-                                    step="0.05"
-                                    className="w-full rounded-lg border border-[#e3e6e1] bg-white px-2.5 py-1.5 text-xs font-mono text-[#1b231f] outline-none focus:border-[#6366f1]"
-                                    value={yMax}
-                                    onChange={(e) => setYMax(e.target.value)}
-                                />
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between pt-1 text-[11px] text-[#4b5563] border-t border-[#eceee9]">
-                            <span>Corridor Dimensions:</span>
-                            <span className="font-mono font-semibold text-[#1f2937]">
-                                ΔX = {Math.abs(parseFloat(xMax || 0) - parseFloat(xMin || 0)).toFixed(2)}m,
-                                ΔY = {Math.abs(parseFloat(yMax || 0) - parseFloat(yMin || 0)).toFixed(2)}m
-                            </span>
-                        </div>
-                    </div>
-
-                    <div className="flex items-center gap-2.5 rounded-lg border border-[#eceee9] bg-[#f7f8f6] p-2.5">
-                        <input
-                            type="checkbox"
-                            id="single-lane-toggle"
-                            checked={isSingleLane}
-                            onChange={(e) => setIsSingleLane(e.target.checked)}
-                            className="h-4 w-4 rounded text-[#6366f1] focus:ring-[#6366f1]"
-                        />
-                        <label htmlFor="single-lane-toggle" className="text-xs font-semibold text-[#374151] cursor-pointer">
-                            Enforce Single-Lane Mutual Exclusion (ORCA Disabled, PIBT Choke Arbitration Active)
-                        </label>
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-[#eceee9]">
-                        <button
-                            type="button"
-                            onClick={onClose}
-                            className="rounded-xl border border-[#e3e6e1] px-4 py-2 text-xs font-semibold text-[#6b776f] hover:bg-[#f7f8f6] transition-colors"
-                        >
-                            Cancel
-                        </button>
-                        <button
-                            type="submit"
-                            className="rounded-xl bg-[#4338ca] px-4 py-2 text-xs font-semibold text-white shadow-sm hover:bg-[#3730a3] transition-colors"
-                        >
-                            {isNew ? "Add Aisle" : "Apply Changes"}
-                        </button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    );
-}
-
-function AisleManagerDrawer({
-    isOpen,
-    onClose,
-    aisles = [],
-    selectedAisleId,
-    onSelectAisle,
-    onStartDrawAisle,
-    onAddManualAisle,
-    onEditAisle,
-    onDeleteAisle,
-    onResetDefaults,
-    onSaveFleet,
-    trafficEvents = [],
-}) {
-    if (!isOpen) return null;
-
-    return (
-        <div className="fixed inset-0 z-40 flex justify-end bg-black/30 backdrop-blur-[1px]">
-            <div className="flex h-full w-full max-w-md flex-col bg-white shadow-2xl animate-[slideLeft_0.2s_ease-out]">
-                {/* Drawer Header */}
-                <div className="flex flex-none items-center justify-between border-b border-[#e3e6e1] px-5 py-3.5 bg-[#fcfdfc]">
-                    <div className="flex items-center gap-2.5">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eef2ff] text-[#4338ca] text-base">
-                            🛣️
-                        </span>
-                        <div>
-                            <h2 className="text-[15px] font-bold text-[#1b231f]" style={displayFont}>
-                                AISLE <i>MANAGER</i>
-                            </h2>
-                            <p className="text-[11px] text-[#6b776f]">
-                                Mutual exclusion corridors & PIBT choke boundaries
-                            </p>
-                        </div>
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="rounded-lg p-1.5 text-[#8e988f] hover:bg-[#f7f8f6] hover:text-[#1b231f]"
-                        aria-label="Close drawer"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                {/* Action Bar */}
-                <div className="flex flex-none flex-wrap items-center gap-2 border-b border-[#eceee9] bg-[#f9fafb] p-3">
-                    <button
-                        onClick={() => {
-                            onClose();
-                            onStartDrawAisle();
-                        }}
-                        className="flex items-center gap-1.5 rounded-lg border border-[#6366f1]/30 bg-white px-3 py-1.5 text-xs font-bold text-[#4338ca] shadow-xs hover:bg-[#eef2ff] transition-colors"
-                        title="Click two opposite corners on the warehouse floor map to set bounds"
-                    >
-                        <span>✏️</span>
-                        <span>Draw on Map</span>
-                    </button>
-
-                    <button
-                        onClick={onAddManualAisle}
-                        className="flex items-center gap-1.5 rounded-lg border border-[#d1d5db] bg-white px-3 py-1.5 text-xs font-semibold text-[#374151] shadow-xs hover:bg-[#f3f4f6] transition-colors"
-                    >
-                        <span>➕</span>
-                        <span>Add Manually</span>
-                    </button>
-
-                    <button
-                        onClick={onResetDefaults}
-                        className="flex items-center gap-1 rounded-lg border border-[#e5e7eb] bg-white px-2.5 py-1.5 text-xs font-medium text-[#6b7280] shadow-xs hover:bg-[#f9fafb] hover:text-[#b91c1c] transition-colors"
-                        title="Reset to 3 default warehouse aisles"
-                    >
-                        <span>↺</span>
-                        <span>Reset Defaults</span>
-                    </button>
-                </div>
-
-                {/* Aisle List */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                    {aisles.length === 0 ? (
-                        <div className="rounded-xl border-2 border-dashed border-[#e3e6e1] p-6 text-center">
-                            <span className="text-3xl">🛣️</span>
-                            <p className="mt-2 text-xs font-semibold text-[#374151]">No single-lane aisles configured.</p>
-                            <p className="mt-1 text-[11px] text-[#8e988f]">
-                                Use "Draw on Map" or "Add Manually" to define mutual exclusion corridors.
-                            </p>
-                        </div>
-                    ) : (
-                        aisles.map((aisle) => {
-                            const segId = aisle.segment_id || aisle.id;
-                            const occ = getAisleOccupancy(segId, trafficEvents);
-                            const isSelected = selectedAisleId === segId;
-                            const dx = Math.abs(aisle.x_max - aisle.x_min).toFixed(2);
-                            const dy = Math.abs(aisle.y_max - aisle.y_min).toFixed(2);
-
-                            return (
-                                <div
-                                    key={segId}
-                                    onClick={() => onSelectAisle(aisle)}
-                                    className={`cursor-pointer rounded-xl border p-3.5 transition-all shadow-xs ${isSelected
-                                        ? "border-[#6366f1] bg-[#f5f7ff] ring-1 ring-[#6366f1]"
-                                        : "border-[#e3e6e1] bg-white hover:border-[#cbd5e1] hover:bg-[#fbfcfb]"
-                                        }`}
-                                >
-                                    <div className="flex items-center justify-between pb-2 border-b border-[#eceee9]">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-bold text-xs text-[#1b231f]">{aisle.name || segId}</span>
-                                            <span className="rounded bg-[#f3f4f6] px-1.5 py-0.5 font-mono text-[10px] text-[#4b5563]">
-                                                {segId}
-                                            </span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5">
-                                            {occ.occupied ? (
-                                                <span className="flex items-center gap-1 rounded-full bg-[#fef3c7] border border-[#fcd34d] px-2 py-0.5 text-[10px] font-bold text-[#b45309]">
-                                                    <span className="h-1.5 w-1.5 rounded-full bg-[#d97706] animate-pulse" />
-                                                    Held by {occ.holder}
-                                                </span>
-                                            ) : (
-                                                <span className="rounded-full bg-[#eef6f2] border border-[#b9d8c9] px-2 py-0.5 text-[10px] font-semibold text-[#2f6f5e]">
-                                                    Clear (Open)
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* Coordinate Readout */}
-                                    <div className="my-2.5 grid grid-cols-2 gap-2 text-[11px] font-mono text-[#4b5563] bg-[#f9fafb] p-2 rounded-lg border border-[#f0f2f0]">
-                                        <div>
-                                            <span className="text-[#9ca3af]">X: </span>
-                                            <span className="font-semibold text-[#1f2937]">[{aisle.x_min.toFixed(2)} → {aisle.x_max.toFixed(2)}]m</span>
-                                            <div className="text-[10px] text-[#6b7280]">Span: {dx}m</div>
-                                        </div>
-                                        <div>
-                                            <span className="text-[#9ca3af]">Y: </span>
-                                            <span className="font-semibold text-[#1f2937]">[{aisle.y_min.toFixed(2)} → {aisle.y_max.toFixed(2)}]m</span>
-                                            <div className="text-[10px] text-[#6b7280]">Span: {dy}m</div>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center justify-between pt-1">
-                                        <span className="text-[10.5px] text-[#6b776f] flex items-center gap-1">
-                                            <span>🔒</span> Single-lane mutual exclusion
-                                        </span>
-                                        <div className="flex items-center gap-2">
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onEditAisle(aisle);
-                                                }}
-                                                className="rounded-md border border-[#e3e6e1] bg-white px-2 py-1 text-[11px] font-semibold text-[#4b5563] hover:bg-[#f3f4f6]"
-                                            >
-                                                Edit
-                                            </button>
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    onDeleteAisle(segId);
-                                                }}
-                                                className="rounded-md border border-[#fee2e2] bg-white px-2 py-1 text-[11px] font-semibold text-[#dc2626] hover:bg-[#fef2f2]"
-                                            >
-                                                Delete
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-
-                {/* Footer / Broadcast Bar */}
-                <div className="flex-none border-t border-[#e3e6e1] bg-[#f8fafc] p-4">
-                    <div className="mb-2 flex items-center gap-2 text-[11px] text-[#64748b]">
-                        <span>ℹ️</span>
-                        <span>Persisted in `aisle_segments.json` & broadcasted on `/fleet/aisle_config`.</span>
-                    </div>
-                    <button
-                        onClick={onSaveFleet}
-                        className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#2f6f5e] py-2.5 text-xs font-bold text-white shadow-md hover:bg-[#28604f] transition-colors"
-                    >
-                        <span>💾</span>
-                        <span>Save & Broadcast to Fleet ({aisles.length} Aisles)</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 function App() {
-    // ── Live ROS data ──────────────────────────────────────────────────────
-    const {
-        rosStatus,
-        liveRobots,
-        liveTasks,
-        liveBundles,
-        allocationEvents,
-        trafficEvents,
-        navPaths,
-        liveReservations,
-        dockStations,
-        liveAisles,
-        dockInfo,
-        broadcastTasks,
-        saveAislesConfig,
-        saveBroadcasterConfig,
-    } = useRos();
-
-    // Derived algorithm overlay state (ORCA / PIBT active robots)
-    const { orca: orcaActive, pibt: pibtStatus } = useAlgoOverlay(trafficEvents);
-
-    // Use live data when available, fall back to mock data
-    const robots = liveRobots ?? [];
-
-    // ── Task state (static + live merged) ─────────────────────────────────
-    const [tasks, setTasks] = useState([]);
-    // When live tasks arrive from ROS, replace the task list entirely
-    useEffect(() => {
-        if (liveTasks !== null) setTasks(liveTasks);
-    }, [liveTasks]);
-
-    // ── Single-lane Aisle state & controls ─────────────────────────────────
-    const [aisles, setAisles] = useState(liveAisles ?? DEFAULT_AISLES);
-    useEffect(() => {
-        if (liveAisles && liveAisles.length > 0) setAisles(liveAisles);
-    }, [liveAisles]);
-
-    const [aisleDrawerOpen, setAisleDrawerOpen] = useState(false);
-    const [aisleDrawingMode, setAisleDrawingMode] = useState(false);
-    const [aisleCorners, setAisleCorners] = useState([]);
-    const [editingAisle, setEditingAisle] = useState(null);
-    const [selectedAisleId, setSelectedAisleId] = useState(null);
-
-    // Keyboard shortcut (Escape cancels aisle drawing)
-    useEffect(() => {
-        function handleKeyDown(e) {
-            if (e.key === "Escape") {
-                if (aisleDrawingMode) {
-                    setAisleDrawingMode(false);
-                    setAisleCorners([]);
-                    setToastMessage("Aisle drawing cancelled.");
-                }
-            }
-        }
-        window.addEventListener("keydown", handleKeyDown);
-        return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [aisleDrawingMode]);
-
-    function startAisleDraw() {
-        setSelectionMode(false);
-        setSelectedPoints([]);
-        setAisleCorners([]);
-        setAisleDrawingMode(true);
-        setToastMessage("Click map: Select Corner 1 of the single-lane aisle.");
-    }
-
-    function cancelAisleDraw() {
-        setAisleDrawingMode(false);
-        setAisleCorners([]);
-    }
-
-    function handleAisleCornerSelect(point) {
-        const corners = [...aisleCorners, point];
-        setAisleCorners(corners);
-        if (corners.length === 2) {
-            const r1 = svgToRos(corners[0].x, corners[0].y);
-            const r2 = svgToRos(corners[1].x, corners[1].y);
-            const nextIndex = aisles.length + 1;
-            const newAisle = {
-                id: `aisle_${nextIndex}`,
-                segment_id: `aisle_${nextIndex}`,
-                name: `Aisle ${nextIndex}`,
-                x_min: Math.min(r1.x, r2.x),
-                x_max: Math.max(r1.x, r2.x),
-                y_min: Math.min(r1.y, r2.y),
-                y_max: Math.max(r1.y, r2.y),
-                is_single_lane: true,
-                isNew: true,
-            };
-            setAisleDrawingMode(false);
-            setAisleCorners([]);
-            setEditingAisle(newAisle);
-        }
-    }
-
-    function handleAddManualAisle() {
-        const nextIndex = aisles.length + 1;
-        setEditingAisle({
-            id: `aisle_${nextIndex}`,
-            segment_id: `aisle_${nextIndex}`,
-            name: `Aisle ${nextIndex}`,
-            x_min: 0.0,
-            x_max: 2.5,
-            y_min: 0.0,
-            y_max: 2.0,
-            is_single_lane: true,
-            isNew: true,
-        });
-    }
-
-    function handleSaveAisle(savedAisle) {
-        const targetId = savedAisle.segment_id || savedAisle.id;
-        const exists = aisles.some((a) => (a.segment_id || a.id) === targetId);
-        let updated;
-        if (exists) {
-            updated = aisles.map((a) => ((a.segment_id || a.id) === targetId ? savedAisle : a));
-        } else {
-            updated = [...aisles, savedAisle];
-        }
-        const normalized = normalizeAisles(updated);
-        setAisles(normalized);
-        saveAislesConfig(normalized);
-        setEditingAisle(null);
-        setSelectedAisleId(targetId);
-        setToastMessage(`Saved aisle "${savedAisle.name}" and broadcasted to fleet!`);
-    }
-
-    function handleDeleteAisle(segId) {
-        const updated = aisles.filter((a) => (a.segment_id || a.id) !== segId);
-        setAisles(updated);
-        saveAislesConfig(updated);
-        if (selectedAisleId === segId) setSelectedAisleId(null);
-        setToastMessage(`Deleted aisle ${segId} from fleet.`);
-    }
-
-    function handleResetDefaults() {
-        setAisles(DEFAULT_AISLES);
-        saveAislesConfig(DEFAULT_AISLES);
-        setToastMessage("Reset aisles to 3 default warehouse corridors.");
-    }
-
-    function handleSaveFleetAisles() {
-        saveAislesConfig(aisles);
-        setToastMessage(`Saved & broadcasted ${aisles.length} aisles to all fleet robots!`);
-    }
-
-    function handleSelectAisleFromMap(aisle) {
-        setSelectedAisleId(aisle.segment_id || aisle.id);
-        setAisleDrawerOpen(true);
-    }
-
-    // ── Staged Tasks state (Draft tasks ready for batch broadcast) ─────────
-    const [stagedTasks, setStagedTasks] = useState([]);
+    const [tasks, setTasks] = useState(initialTasks);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedPoints, setSelectedPoints] = useState([]);
-    const [mapZoom, setMapZoom] = useState({ zoom: 100, pixelsPerMeter: 20 });
     const [taskToDelete, setTaskToDelete] = useState(null);
-    const [toastMessage, setToastMessage] = useState("");
-
-    useEffect(() => {
-        if (!toastMessage) return undefined;
-        const timer = setTimeout(() => setToastMessage(""), 4500);
-        return () => clearTimeout(timer);
-    }, [toastMessage]);
-
     function startTaskSelection() {
-        setAisleDrawingMode(false);
-        setAisleCorners([]);
         setSelectedPoints([]);
         setSelectionMode(true);
     }
-
     function cancelTaskSelection() {
         setSelectedPoints([]);
         setSelectionMode(false);
     }
-
     function requestDeleteTask(taskNumber) {
         setTaskToDelete(tasks.find((task) => task.number === taskNumber) || null);
     }
-
     function confirmDeleteTask() {
         if (!taskToDelete) return;
         setTasks((current) => current.filter((task) => task.number !== taskToDelete.number));
         setTaskToDelete(null);
     }
-
-    // Handles map click points for staging tasks (point 0: pickup, point 1: dropoff)
     function handlePointSelect(point) {
         const points = [...selectedPoints, point];
         setSelectedPoints(points);
         if (points.length === 2) {
-            const nextIndex = stagedTasks.length + 1;
-            const pRos = svgToRos(points[0].x, points[0].y);
-            const dRos = svgToRos(points[1].x, points[1].y);
-            const newStaged = {
-                id: `staged-${Date.now()}-${nextIndex}`,
-                number: nextIndex,
-                name: `T${nextIndex}`,
-                start: points[0],
-                end: points[1],
-                pickupRos: pRos,
-                dropoffRos: dRos,
-                priority: 1,
-            };
-            setStagedTasks((prev) => [...prev, newStaged]);
-            setSelectedPoints([]);
-
-            if (stagedTasks.length + 1 >= 5) {
-                setSelectionMode(false);
-                setToastMessage("Staged 5 tasks! Review them and click 'Broadcast Fleet Tasks' to deploy.");
-            } else {
-                setToastMessage(`Staged Task T${nextIndex} (${stagedTasks.length + 1}/5). Click map to add next or Broadcast now.`);
-            }
-        }
-    }
-
-    function handleBroadcastStaged() {
-        if (stagedTasks.length === 0) return;
-        const sent = broadcastTasks(stagedTasks);
-        if (sent) {
-            setToastMessage(` Broadcasted ${stagedTasks.length} tasks to fleet as AVAILABLE!`);
-            setStagedTasks([]);
-            setSelectionMode(false);
-        } else {
-            // Local fallback when ROS bridge isn't running
             setTasks((current) => [
                 ...current,
-                ...stagedTasks.map((t) => ({
-                    number: t.number,
-                    name: t.name,
+                {
+                    number: Math.max(0, ...current.map((task) => task.number || 0)) + 1,
+                    name: `Task ${Math.max(0, ...current.map((task) => task.number || 0)) + 1}`,
                     assigned: false,
                     robot: null,
                     progress: 0,
-                    state: 0,
-                    stateLabel: "Available",
-                    start: t.start,
-                    end: t.end,
-                })),
+                    start: points[0],
+                    end: points[1],
+                },
             ]);
-            setToastMessage(`Broadcasted ${stagedTasks.length} tasks locally (ROS offline fallback).`);
-            setStagedTasks([]);
             setSelectionMode(false);
+            setSelectedPoints([]);
         }
     }
-
-    // Quick-fills 5 preset warehouse tasks across open aisles
-    function stageFiveWarehouseTasks() {
-        const samples = [
-            { id: "T1", p: { x: 2.0, y: 1.0 }, d: { x: -2.0, y: -1.0 }, pri: 2 },
-            { id: "T2", p: { x: 3.5, y: 1.0 }, d: { x: -3.5, y: -1.0 }, pri: 1 },
-            { id: "T3", p: { x: 2.0, y: -2.5 }, d: { x: -2.0, y: 2.5 }, pri: 3 },
-            { id: "T4", p: { x: 4.0, y: -2.5 }, d: { x: -4.0, y: 2.5 }, pri: 1 },
-            { id: "T5", p: { x: 1.0, y: 3.0 }, d: { x: -1.0, y: -3.0 }, pri: 2 },
-        ];
-        const newStaged = samples.map((s, idx) => ({
-            id: `staged-${s.id}-${Date.now()}`,
-            number: idx + 1,
-            name: s.id,
-            start: rosToSvg(s.p.x, s.p.y),
-            end: rosToSvg(s.d.x, s.d.y),
-            pickupRos: s.p,
-            dropoffRos: s.d,
-            priority: s.pri,
-        }));
-        setStagedTasks(newStaged);
-        setSelectionMode(false);
-        setSelectedPoints([]);
-        setToastMessage("Pre-staged 5 warehouse tasks! Click 'Broadcast Fleet Tasks' to deploy.");
-    }
-
-    function removeStagedTask(id) {
-        setStagedTasks((prev) => prev.filter((t) => t.id !== id));
-    }
-
-    function clearStagedTasks() {
-        setStagedTasks([]);
-        setSelectedPoints([]);
-        setSelectionMode(false);
-    }
-
     return (
         <div
             className="flex h-screen flex-col overflow-hidden bg-[#f7f8f6] text-[#1b231f]"
@@ -2535,91 +772,42 @@ function App() {
                     ATLAS<i>FLEET</i>
                 </div>
                 <div className="hidden h-[22px] w-px bg-[#e3e6e1] md:block" />
-                {/* ROS connection status badge */}
-                <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${rosStatus === 'connected' ? 'bg-[#e4efe9] text-[#2f6f5e]'
-                    : rosStatus === 'error' ? 'bg-[#f6e4e1] text-[#c0453b]'
-                        : 'bg-[#eceee9] text-[#8e988f]'
-                    }`}>
-                    <span className={`h-[7px] w-[7px] rounded-full ${rosStatus === 'connected' ? 'bg-[#2f6f5e] animate-pulse'
-                        : rosStatus === 'error' ? 'bg-[#c0453b]'
-                            : 'bg-[#8e988f]'
-                        }`} />
-                    {rosStatus === 'connected' ? 'ROS Live' : rosStatus === 'error' ? 'ROS Error' : 'ROS Connecting…'}
-                </div>
-
-                {/* Single-lane Aisle Manager Toggle */}
-                <button
-                    onClick={() => setAisleDrawerOpen(true)}
-                    className="flex items-center gap-1.5 rounded-full border border-[#6366f1]/35 bg-[#eef2ff] px-2.5 py-1 text-[11px] font-bold text-[#4338ca] hover:bg-[#e0e7ff] transition-colors"
-                    title="View and configure single-lane aisle reservation zones"
-                >
-                    <span>🛣️</span>
-                    <span>Aisles ({aisles.length})</span>
-                </button>
-
                 <div className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-sm font-semibold" style={displayFont}>
                     LIVE FLOOR <i>MAP</i>
                 </div>
                 <div className="absolute right-3.5 hidden items-center gap-3.5 text-xs text-[#6b776f] lg:flex md:right-5">
                     <span className="flex items-center gap-1.5 whitespace-nowrap">
                         <i className="h-2 w-2 rounded-full bg-[#2f6f5e]" />
-                        {robots.filter(r => r.online && r.state !== 'warn').length} Active
+                        4 Active
                     </span>
                     <span className="flex items-center gap-1.5 whitespace-nowrap">
                         <i className="h-2 w-2 rounded-full bg-[#c97a2b]" />
-                        {robots.filter(r => r.online && r.battery <= 20).length} Low power
+                        0 Low power
                     </span>
                     <span className="flex items-center gap-1.5 whitespace-nowrap">
                         <i className="h-2 w-2 rounded-full bg-[#b7beb8]" />
-                        {robots.filter(r => !r.online).length} Offline
+                        0 Offline
                     </span>
                 </div>
             </header>
             <main className="flex min-h-0 flex-1 flex-col">
                 <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-                    <RobotStatusPanel robots={robots} />
+                    <RobotStatusPanel />
                     <MapPanel
-                        robots={robots}
                         selectionMode={selectionMode}
                         selectedPoints={selectedPoints}
                         tasks={tasks}
-                        stagedTasks={stagedTasks}
                         onPointSelect={handlePointSelect}
-                        dockInfo={dockInfo}
-                        aisles={aisles}
-                        selectedAisleId={selectedAisleId}
-                        onSelectAisle={handleSelectAisleFromMap}
-                        aisleDrawingMode={aisleDrawingMode}
-                        aisleCorners={aisleCorners}
-                        onAisleCornerSelect={handleAisleCornerSelect}
-                        onCancelAisleDraw={cancelAisleDraw}
-                        onOpenAisleManager={() => setAisleDrawerOpen(true)}
-                        trafficEvents={trafficEvents}
-                        onZoomChange={setMapZoom}
-                        navPaths={navPaths}
-                        orcaActive={orcaActive}
-                        pibtStatus={pibtStatus}
-                        dockStations={dockStations}
-                        onSaveBroadcaster={saveBroadcasterConfig}
                     />
                     <TaskStatusPanel
                         tasks={tasks}
-                        robots={robots}
-                        stagedTasks={stagedTasks}
                         selectionMode={selectionMode}
                         onAdd={startTaskSelection}
                         onCancel={cancelTaskSelection}
                         onDelete={requestDeleteTask}
-                        onBroadcastStaged={handleBroadcastStaged}
-                        onStageFive={stageFiveWarehouseTasks}
-                        onRemoveStaged={removeStagedTask}
-                        onClearStaged={clearStagedTasks}
                     />
                 </div>
-                <div className="flex min-h-0 flex-[0.85] flex-col border-t border-[#c4cbc5] md:flex-row">
-                    <EfficiencyPanel tasks={tasks} />
-                    <AllocationPanel allocationEvents={allocationEvents} trafficEvents={trafficEvents} liveBundles={liveBundles} />
-                </div>
+                <EfficiencyPanel tasks={tasks} />
             </main>
             {taskToDelete && (
                 <DeleteTaskDialog
@@ -2627,37 +815,6 @@ function App() {
                     onCancel={() => setTaskToDelete(null)}
                     onConfirm={confirmDeleteTask}
                 />
-            )}
-            {aisleDrawerOpen && (
-                <AisleManagerDrawer
-                    isOpen={aisleDrawerOpen}
-                    onClose={() => setAisleDrawerOpen(false)}
-                    aisles={aisles}
-                    selectedAisleId={selectedAisleId}
-                    onSelectAisle={handleSelectAisleFromMap}
-                    onStartDrawAisle={startAisleDraw}
-                    onAddManualAisle={handleAddManualAisle}
-                    onEditAisle={(a) => setEditingAisle(a)}
-                    onDeleteAisle={handleDeleteAisle}
-                    onResetDefaults={handleResetDefaults}
-                    onSaveFleet={handleSaveFleetAisles}
-                    trafficEvents={trafficEvents}
-                    robots={robots}
-                />
-            )}
-            {editingAisle && (
-                <AisleEditModal
-                    aisle={editingAisle}
-                    isNew={editingAisle.isNew}
-                    onClose={() => setEditingAisle(null)}
-                    onSave={handleSaveAisle}
-                />
-            )}
-            {toastMessage && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 rounded-full border border-[#2f6f5e]/40 bg-[#1b231f] text-white px-5 py-2.5 text-xs font-semibold shadow-2xl animate-[fadeIn_0.2s_ease-out]">
-                    <span className="h-2 w-2 rounded-full bg-[#2f6f5e] animate-ping" />
-                    <span>{toastMessage}</span>
-                </div>
             )}
         </div>
     );

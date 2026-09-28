@@ -1,5 +1,9 @@
  # FleetManager
 
+[Watch the FleetManager video demo](media/Fleet-Managment.mp4)
+
+<video src="media/Fleet-Managment.mp4" width="800" controls> Your browser is doesn't support video tag</video>
+
 FleetManager is a decentralized ROS 2 fleet-management system for a simulated warehouse. Multiple robots share work, negotiate ownership, plan their own routes, coordinate through narrow aisles, and report progress without relying on one central allocator.
 
 The important idea is that the system separates **who should do a task**, **in what order**, and **how robots safely move**. Each concern has its own decision-maker, so a temporary communication gap or a blocked robot does not require the entire fleet to stop.
@@ -7,10 +11,6 @@ The important idea is that the system separates **who should do a task**, **in w
 ## The User Interface
 
 The web interface is an operator dashboard for understanding what the fleet is doing while it is working. It does not replace the decentralized decision-making inside the robots. Instead, it collects the current fleet state and presents the result as a live warehouse view.
-
-### Video Demo
-
-[Watch the FleetManager video demo](media/Fleet-Managment.mp4)
 
 ### Website UI
 

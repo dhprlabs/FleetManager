@@ -4,6 +4,53 @@ FleetManager is a decentralized ROS 2 fleet-management system for a simulated wa
 
 The important idea is that the system separates **who should do a task**, **in what order**, and **how robots safely move**. Each concern has its own decision-maker, so a temporary communication gap or a blocked robot does not require the entire fleet to stop.
 
+## The User Interface
+
+The web interface is an operator dashboard for understanding what the fleet is doing while it is working. It does not replace the decentralized decision-making inside the robots. Instead, it collects the current fleet state and presents the result as a live warehouse view.
+
+### Video Demo
+
+[Watch the FleetManager video demo](media/Fleet-Managment.mp4)
+
+### Website UI
+
+![FleetManager website UI](media/Frontend_UI.png)
+
+### Gazebo UI
+
+![FleetManager Gazebo UI](media/Gazebo_UI.png)
+
+### Robot status
+
+The robot panel shows each robot's identity, connection state, battery level, and current activity. This lets an operator quickly see whether a robot is available, executing a task, charging, offline, or in maintenance. Battery indicators change as the robot approaches a low-power condition.
+
+### Live warehouse map
+
+The central map shows the warehouse layout together with:
+
+- robot positions and movement;
+- pickup and dropoff points for tasks;
+- task labels and progress markers;
+- planned navigation paths;
+- single-lane aisle regions and traffic information;
+- dock or broadcaster positions when they are available.
+
+The map can be zoomed, reset, and panned. To create a task from the interface, the operator enters task-selection mode and chooses an open pickup point followed by an open dropoff point. Wall areas are rejected so that a task cannot accidentally be created on an occupied map cell.
+
+### Task status
+
+The task panel shows the current queue and makes ownership visible. Each task displays whether it is unassigned or assigned, which robot owns it, and how far it has progressed. Unassigned tasks can be removed, while new tasks can be added from the map. The panel also reports the fleet's overall on-time completion percentage.
+
+### Efficiency timeline
+
+The efficiency timeline gives an overview of task scheduling over time. It distinguishes work that is waiting, active, completed, or delayed and overlays the current point in time. The timeline can be minimized for more map space or expanded when the operator needs a broader view of fleet throughput.
+
+### Live data flow
+
+The frontend connects to ROS through `rosbridge_websocket` at `ws://localhost:9090`. It listens for robot states, task updates, ownership changes, local bundles, world-view updates, navigation plans, reservations, allocator decisions, and traffic events. ROS coordinates are converted into map coordinates for display, and the interface automatically reconnects if the WebSocket connection is interrupted.
+
+The same operational state can also be inspected in RViz. The web interface is intended for a quick fleet-wide overview and task interaction, while RViz remains useful for detailed robotics visualization and navigation debugging.
+
 ## How The System Works
 
 At a high level, the system follows this loop:
@@ -120,53 +167,6 @@ Other robots compare that observation with their replicated world view:
 - duplicate observations are safely ignored using observation ids.
 
 This lets the fleet recover from stale assignments and inconsistent knowledge without allowing two robots to continue believing they own the same physical item.
-
-## The User Interface
-
-The web interface is an operator dashboard for understanding what the fleet is doing while it is working. It does not replace the decentralized decision-making inside the robots. Instead, it collects the current fleet state and presents the result as a live warehouse view.
-
-### Website UI
-
-![FleetManager website UI](media/Frontend_UI.png)
-
-### Gazebo UI
-
-![FleetManager Gazebo UI](media/Gazebo_UI.png)
-
-### Nav2 - RVIz UI
-
-![FleetManager Nav2-Rviz UI](media/Nav2_UI.png)
-
-### Robot status
-
-The robot panel shows each robot's identity, connection state, battery level, and current activity. This lets an operator quickly see whether a robot is available, executing a task, charging, offline, or in maintenance. Battery indicators change as the robot approaches a low-power condition.
-
-### Live warehouse map
-
-The central map shows the warehouse layout together with:
-
-- robot positions and movement;
-- pickup and dropoff points for tasks;
-- task labels and progress markers;
-- planned navigation paths;
-- single-lane aisle regions and traffic information;
-- dock or broadcaster positions when they are available.
-
-The map can be zoomed, reset, and panned. To create a task from the interface, the operator enters task-selection mode and chooses an open pickup point followed by an open dropoff point. Wall areas are rejected so that a task cannot accidentally be created on an occupied map cell.
-
-### Task status
-
-The task panel shows the current queue and makes ownership visible. Each task displays whether it is unassigned or assigned, which robot owns it, and how far it has progressed. Unassigned tasks can be removed, while new tasks can be added from the map. The panel also reports the fleet's overall on-time completion percentage.
-
-### Efficiency timeline
-
-The efficiency timeline gives an overview of task scheduling over time. It distinguishes work that is waiting, active, completed, or delayed and overlays the current point in time. The timeline can be minimized for more map space or expanded when the operator needs a broader view of fleet throughput.
-
-### Live data flow
-
-The frontend connects to ROS through `rosbridge_websocket` at `ws://localhost:9090`. It listens for robot states, task updates, ownership changes, local bundles, world-view updates, navigation plans, reservations, allocator decisions, and traffic events. ROS coordinates are converted into map coordinates for display, and the interface automatically reconnects if the WebSocket connection is interrupted.
-
-The same operational state can also be inspected in RViz. The web interface is intended for a quick fleet-wide overview and task interaction, while RViz remains useful for detailed robotics visualization and navigation debugging.
 
 ## Running The System
 
